@@ -1,73 +1,78 @@
-# React + TypeScript + Vite
+# Frontend — Supply Chain Risk Intelligence Dashboard
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+React 19 + TypeScript + Vite 8 + Tailwind CSS v4 single-page dashboard for visualizing semiconductor supply chain risks.
 
-Currently, two official plugins are available:
+## Tech Stack
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+- **React 19** with TypeScript
+- **Vite 8** for dev server and bundling
+- **Tailwind CSS v4** with `@tailwindcss/vite` plugin
+- **shadcn/ui** (Radix primitives) for UI components
+- **Framer Motion** for animations
+- **react-globe.gl** + Three.js for 3D supply route visualization
+- **TanStack React Query** for data fetching
 
-## React Compiler
+## Prerequisites
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+- **Node.js** >= 18
+- **npm** >= 9
 
-## Expanding the ESLint configuration
+## Setup
 
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
+1. **Install dependencies:**
 
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
+   ```bash
+   cd Frontend
+   npm install --legacy-peer-deps
+   ```
 
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
+   > `--legacy-peer-deps` is needed because `@tailwindcss/vite` hasn't published Vite 8 in its peer dependency range yet (support is merged but unreleased). This flag is safe to use here.
 
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+2. **Start the dev server:**
+
+   ```bash
+   npm run dev
+   ```
+
+   The app will be available at [http://localhost:5173](http://localhost:5173).
+
+## Available Scripts
+
+| Command             | Description                          |
+| ------------------- | ------------------------------------ |
+| `npm run dev`       | Start Vite dev server with HMR       |
+| `npm run build`     | TypeScript check + production build   |
+| `npm run lint`      | Run ESLint                           |
+| `npm run preview`   | Preview the production build locally  |
+
+## Project Structure
+
+```
+src/
+├── components/
+│   └── ui/          # shadcn/ui components (Toast, Tooltip, etc.)
+├── data/
+│   └── simulatedData.ts  # Hardcoded mock data (no live API yet)
+├── hooks/           # Custom React hooks
+├── lib/
+│   └── utils.ts     # Utility functions (cn helper for Tailwind classes)
+├── pages/
+│   └── Index.tsx    # Main dashboard page composing all panels
+├── App.tsx          # Root app component with routing
+├── main.tsx         # Entry point
+└── index.css        # Global styles + Tailwind imports
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+### Dashboard Panels
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
+- **MetricsPanel** — Key risk metrics and KPIs
+- **GlobeView** — 3D interactive globe showing supply routes
+- **AgentWorkflow** — AI agent orchestration status
+- **ScenariosPanel** — Risk scenario simulations
+- **RiskTable** — Detailed risk data table
 
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
-```
+## Configuration
+
+- Path alias `@` maps to `./src` (configured in `vite.config.ts` and `tsconfig.json`)
+- Dark theme with IBM Plex fonts and risk-level color coding (red/amber/green)
+- 12-column grid layout
