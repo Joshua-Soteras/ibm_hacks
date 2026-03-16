@@ -4,7 +4,9 @@ import GlobeView from "@/components/dashboard/GlobeView";
 import AgentWorkflow from "@/components/dashboard/AgentWorkflow";
 import RiskTable from "@/components/dashboard/RiskTable";
 
+
 const Index = () => {
+
     return (
         <div className="h-screen w-screen bg-background p-4 grid grid-cols-12 grid-rows-6 gap-4 overflow-hidden">
             {/* Left Panel: Metrics + Scenarios */}
