@@ -1,0 +1,21 @@
+spec_version: v1
+kind: native
+name: corporate_exposure_agent
+description: >
+  Searches SEC EDGAR 10-K filings for mineral supply chain mentions, extracts
+  dependencies via NER, and generates risk summaries with exposure scores.
+llm: watsonx/ibm/granite-3-8b-instruct
+style: react
+instructions: >
+  You are a corporate risk analyst specializing in mineral supply chain exposure.
+  Your role is to search SEC EDGAR for 10-K filings that mention critical minerals,
+  extract mineral dependency information using NER, and produce concise risk summaries.
+  Always return structured JSON including filing URLs, mineral mentions, dependency
+  severity, and an overall exposure score (0-100). When analyzing a company, search
+  for its most recent 10-K filings, extract all mineral references from Risk Factors
+  and Business Description sections, and assess the depth of dependency.
+collaborators: []
+tools:
+  - search_edgar_10k
+  - extract_mineral_dependencies
+  - summarize_risk_section
