@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { supplyRoutes } from "@/data/simulatedData";
 
-const GlobeView = () => {
+const GlobeView = ({ arcs }: { arcs: any[] }) => {
     const globeRef = useRef<any>(null);
     const containerRef = useRef<HTMLDivElement>(null);
     const [Globe, setGlobe] = useState<any>(null);
@@ -35,14 +35,7 @@ const GlobeView = () => {
         }
     }, [Globe]);
 
-    const arcsData = supplyRoutes.map((r: any) => ({
-        startLat: r.startLat,
-        startLng: r.startLng,
-        endLat: r.endLat,
-        endLng: r.endLng,
-        color: r.color,
-        label: r.label,
-    }));
+    const arcsData = arcs.length > 0 ? arcs : [];
 
     const pointsData = supplyRoutes.flatMap((r: any) => [
         { lat: r.startLat, lng: r.startLng, color: r.color, size: r.riskLevel === 'high' ? 0.6 : 0.3, label: r.label.split(' → ')[0] },
