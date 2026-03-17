@@ -22,6 +22,9 @@ instructions: >
   Always return structured JSON with trade flow arrays including country, value,
   and market share. When asked about supply concentration, compute the HHI and
   classify as low (<1500), moderate (1500-2500), or high (>2500).
+
+  CRITICAL: Always call your tools. Never say you cannot access data.
+  If a tool returns empty results, report that — do not apologize.
 collaborators: []
 tools:
   - query_import_volumes

@@ -40,6 +40,8 @@ cd backend && .venv/bin/python migrate_to_db.py    # Rebuild mineralwatch.db fro
 
 Environment variables required in root `.env`: `IBM_API_KEY`, `ORCHESTRATE_APIKEY`, `ORCHESTRATE_IAM_APIKEY`, `ORCHESTRATE_URL`, `ORCHESTRATE_AUTH_TYPE`.
 
+Optional: `BACKEND_API_URL` — public URL of the FastAPI backend (e.g. ngrok tunnel). Used by ADK tools in cloud deployment to call back to the backend instead of querying local SQLite. Not needed for local dev.
+
 ## Architecture
 
 ### Frontend (React 19 + TypeScript + Vite + TailwindCSS v4)
@@ -56,13 +58,14 @@ Environment variables required in root `.env`: `IBM_API_KEY`, `ORCHESTRATE_APIKE
 **Dashboard Panels** (composed in `src/pages/Index.tsx`):
 - **CompanySelector** — dropdown to pick a company for analysis
 - **MetricsPanel** — risk score, trade concentration, corporate exposure, substitutability; shows disrupted scores + delta during simulation
-- **GlobeView** — 3D globe with supply arcs colored by risk level; supports disrupted/stressed/active arc states during simulation
-- **AgentWorkflow** — real-time agent execution timeline streamed via SSE from `/api/analyze-stream/{company}`
-- **ScenariosPanel** — dynamic disruption scenario cards generated from trade concentration data; click-to-simulate with reset
-- **RiskTable** — trade flow table with concentration bars
+- **GlobeView** — 3D globe with supply arcs colored by risk level; risk-proportional thickness (high=1.2, elevated=0.8, low=0.4) and animation speed (high=4s slow, elevated=2.5s, low=1.2s fast); staggered arc launches via `arcDashInitialGap`; supports disrupted/stressed/active arc states during simulation (disrupted uses `rgba()` notation for Three.js-compatible transparent colors)
+- **AgentWorkflow** — real-time agent execution timeline streamed via SSE from `/api/analyze-stream/{company}`; expandable full agent output on steps with truncated content (animated expand/collapse)
+- **ScenariosPanel** — dynamic disruption scenario cards generated from trade concentration data; click-to-simulate with reset; custom free-text scenario input that invokes the cloud agent
+- **RiskTable** — sortable trade flow table with concentration bars (click column headers to sort)
 
 **Key Frontend Files:**
-- `src/hooks/useAnalysisStream.ts` — SSE hook using `EventSource` API, manages 4-step agent workflow state
+- `src/hooks/useAnalysisStream.ts` — SSE hook using `EventSource` API, manages 4-step agent workflow state; `AgentStepData` includes optional `full_output` for untruncated agent text
+- `src/hooks/useCustomScenarioStream.ts` — SSE hook for free-text custom scenario analysis via `/api/custom-scenario-stream/{company}`; stores `full_output` from SSE events
 - `src/lib/api.ts` — Axios API client with TypeScript interfaces (`ScenarioCard`, `SimulationResult`)
 - `src/data/countryCoords.json` — ~130 country centroid coordinates for globe arc rendering
 - `src/data/simulatedData.ts` — legacy mock data (no longer imported by any component)
@@ -80,7 +83,14 @@ Environment variables required in root `.env`: `IBM_API_KEY`, `ORCHESTRATE_APIKE
 - `GET /api/company/summary/{company}` — company name + risk summary snippet
 - `GET /api/company/scenarios/{company}` — dynamic disruption scenarios based on trade concentration (minerals with >30% single-country share)
 - `POST /api/simulate` — accepts `{company, country, mineral, disruption_pct?}`, returns disrupted risk scores with flow statuses
+- `GET /api/mineral/trade/{mineral}?year=` — import volumes by country for a mineral (ADK tool callback)
+- `GET /api/mineral/profile/{mineral}` — structured USGS/EDGAR mineral profile (ADK tool callback)
+- `GET /api/company/dependencies/{company}` — mineral dependencies with severity (ADK tool callback)
+- `GET /api/risk-summary?company=&mineral=` — risk summary, company-centric or mineral-centric (ADK tool callback)
+- `GET /api/edgar/cik/{company}` — CIK lookup from EDGAR data (ADK tool callback)
 - `GET /api/analyze-stream/{company}` — SSE endpoint streaming staged analysis events (orchestrator_planning → trade_intel → corporate_exposure → orchestrator_scoring → complete)
+- `GET /api/custom-scenario-stream/{company}?scenario=` — SSE endpoint for free-text custom scenario analysis via cloud agent
+- `GET /api/agent-diagnostics` — debug endpoint: env var status, agent UUID resolution, callback reachability
 
 **`analytics.py`** — risk analysis engine querying `mineralwatch.db`. Decomposed into staged helpers for SSE streaming:
 - `_get_trade_data_for_company(company, conn, minerals)` — trade flows + HHI computation
@@ -88,6 +98,15 @@ Environment variables required in root `.env`: `IBM_API_KEY`, `ORCHESTRATE_APIKE
 - `analyze_company(company)` — full analysis (calls both helpers), same return shape as before
 - `get_company_scenarios(company)` — generates up to 5 disruption scenarios from concentrated trade flows
 - `simulate_company_disruption(company, country, mineral, disruption_pct)` — re-scores with a country/mineral removed, uplifts corporate by 15, marks flows as disrupted/stressed/active
+- `get_mineral_trade_flows(mineral, year)` — import volumes grouped by country (ADK tool callback)
+- `get_mineral_profile_data(mineral)` — structured mineral profile from USGS/EDGAR (ADK tool callback)
+- `get_company_dependencies(company)` — mineral dependencies with severity from matrix + filing fallback (ADK tool callback)
+- `get_risk_summary(company, mineral)` — company-centric or mineral-centric risk summary (ADK tool callback)
+- `lookup_edgar_cik(company)` — CIK lookup from EDGAR data (ADK tool callback)
+
+**`agent_client.py`** — IBM Watson Orchestrate RunClient integration for invoking the deployed `risk_orchestrator` agent. Uses IAM authentication, agent UUID resolution, and polling for run completion. Falls back to keyword-based extraction + local `simulate_company_disruption()` if the agent is unavailable. Powers both `/api/analyze-stream/{company}` (concurrent agent + local analytics) and `/api/custom-scenario-stream/{company}` (agent-only with simulation). Includes apology/refusal detection (`_is_agent_useful()`) — when the cloud LLM returns conversational refusals instead of tool outputs, the local analytics summary is preserved and the result includes `agent_enriched: false`. SSE events include `full_output` field with untruncated agent text when the response exceeds the display truncation threshold (300 chars for standard analysis, 600 chars for custom scenarios).
+
+**`analytics.py`** includes `resolve_company_name()` which normalizes company names for callback endpoints. Handles LLM-reformulated names (e.g., "Amazon.com Inc" → "AMAZON COM INC") by stripping punctuation and doing case-insensitive matching against the DB.
 
 Computes composite risk score using three weighted components:
 - Trade Risk (40%): average HHI normalized to 0–100 via piecewise DOJ/FTC thresholds (0-1500→0-30, 1500-2500→30-60, 2500-5000→60-85, 5000-10000→85-100)
@@ -106,7 +125,7 @@ Three agents using `groq/openai/gpt-oss-120b` (Groq-served, 120B params, fast in
 
 ### ADK Tools (`backend/adk-project/tools/`)
 
-All data-pulling tools query `mineralwatch.db` exclusively — no CSV or Excel reads at runtime.
+Tools support dual-mode data access: local SQLite (default) or HTTP callbacks to the FastAPI backend when `BACKEND_API_URL` is set (cloud deployment). The switch is controlled by `_api.py:is_api_mode()` which resolves the URL from either an Orchestrate `key_value_creds` connection (`app_id: backend_api`) or the `BACKEND_API_URL` env var.
 
 | Tool | Source Table(s) | Purpose |
 |------|----------------|---------|
@@ -120,7 +139,39 @@ All data-pulling tools query `mineralwatch.db` exclusively — no CSV or Excel r
 | `simulate_disruption` | (pure computation) | Disruption scenario modeling |
 | `generate_mitigation_brief` | (stub, not wired to any agent) | Mitigation recommendations — awaiting Granite LLM |
 
-Shared helpers in `_db.py`: `get_db_conn()`, `strip_mineral_qualifier()` (handles matrix names like `"HAFNIUM (see ZIRCONIUM)"`), `USGS_COL`, `DEFAULT_RISK_SCORE`.
+Shared helpers (local dev only — cloud tools inline these via try/except fallback):
+- `_db.py`: `get_db_conn()` (raises `FileNotFoundError` with guidance when DB missing), `strip_mineral_qualifier()`, `USGS_COL`, `DEFAULT_RISK_SCORE`
+- `_api.py`: `is_api_mode()`, `api_get()`, `BACKEND_CONNECTION` (credential declaration for `@tool()` decorators)
+
+**Cloud compatibility:** Each tool file wraps `_api`/`_db` imports in `try/except (ImportError, ModuleNotFoundError)` with inlined fallback definitions. Watson Orchestrate imports tools as standalone files (no access to sibling modules), so the fallback provides `BACKEND_CONNECTION`, `is_api_mode()`, `api_get()`, constants, and a `get_db_conn()` stub that raises `RuntimeError`.
+
+### Cloud Deployment (IBM Watson Orchestrate)
+
+ADK tools are deployed to Watson Orchestrate cloud. Since the SQLite DB isn't available there, tools call back to the FastAPI backend via HTTP. Setup:
+
+```bash
+# 1. Create connection for backend URL
+orchestrate connections add --app-id backend_api
+orchestrate connections configure --app-id backend_api --env draft --kind key_value --type team
+orchestrate connections configure --app-id backend_api --env live --kind key_value --type team
+orchestrate connections set-credentials --app-id backend_api --env draft --entries "BACKEND_API_URL=https://your-backend-url"
+orchestrate connections set-credentials --app-id backend_api --env live --entries "BACKEND_API_URL=https://your-backend-url"
+
+# 2. Import tools with connection binding
+for t in query_import_volumes get_mineral_profile extract_mineral_deps summarize_risk_section search_edgar_10k compute_composite_risk; do
+  orchestrate tools import --file "tools/${t}.py" --kind python --app-id backend_api
+done
+
+# 3. Import and deploy agents
+orchestrate agents import --file agents/trade_intel_agent.yaml
+orchestrate agents import --file agents/corporate_exposure_agent.yaml
+orchestrate agents import --file agents/risk_orchestrator.yaml
+orchestrate agents deploy --name trade_intel_agent
+orchestrate agents deploy --name corporate_exposure_agent
+orchestrate agents deploy --name risk_orchestrator
+```
+
+For local dev with ngrok: set `BACKEND_API_URL` in `.env` and run ngrok on port 8000. The `_api.py` helper includes an `ngrok-skip-browser-warning` header to bypass the free-tier interstitial.
 
 ### Database (`data/mineralwatch.db`)
 

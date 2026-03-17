@@ -20,6 +20,11 @@ DEFAULT_RISK_SCORE = 50
 
 def get_db_conn() -> sqlite3.Connection:
     """Return a connection to the mineralwatch SQLite database."""
+    if not DB_PATH.exists():
+        raise FileNotFoundError(
+            f"Database not found at {DB_PATH}. "
+            "Set BACKEND_API_URL env var for cloud deployment."
+        )
     conn = sqlite3.connect(str(DB_PATH))
     conn.row_factory = sqlite3.Row
     return conn

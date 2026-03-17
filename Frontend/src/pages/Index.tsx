@@ -1,8 +1,9 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { fetchCompanies, fetchCompanyScenarios, simulateDisruption } from "@/lib/api";
 import type { ScenarioCard, SimulationResult } from "@/lib/api";
 import { useAnalysisStream } from "@/hooks/useAnalysisStream";
+import { useCustomScenarioStream } from "@/hooks/useCustomScenarioStream";
 import MetricsPanel from "@/components/dashboard/MetricsPanel";
 import ScenariosPanel from "@/components/dashboard/ScenariosPanel";
 import GlobeView from "@/components/dashboard/GlobeView";
@@ -19,6 +20,7 @@ const Index = () => {
     const [simulationResult, setSimulationResult] = useState<SimulationResult | null>(null);
 
     const { steps, isStreaming, analysisResult, startStream } = useAnalysisStream();
+    const { customSteps, isCustomStreaming, customResult, startCustomStream, resetCustom } = useCustomScenarioStream();
     const analysis = analysisResult;
     const isAnalyzing = isStreaming;
 
@@ -54,21 +56,38 @@ const Index = () => {
     const handleResetScenario = () => {
         setActiveScenario(null);
         setSimulationResult(null);
+        resetCustom();
     };
+
+    const handleCustomScenario = (text: string) => {
+        if (!selectedCompany) return;
+        setActiveScenario(null);
+        setSimulationResult(null);
+        startCustomStream(selectedCompany, text);
+    };
+
+    // Apply custom scenario result when it arrives
+    useEffect(() => {
+        if (customResult) {
+            setSimulationResult(customResult);
+        }
+    }, [customResult]);
 
     // Map trade flows to globe arcs — use disrupted flows when simulation is active
     const flows = simulationResult?.disrupted_trade_flows || analysis?.trade_flows || [];
-    const arcs = flows.map((f: any) => {
+    const arcs = flows.map((f: any, index: number) => {
         const start = countryCoords[f.country] || [0, 0];
         const end = [37.09, -95.71]; // USA
 
         let color = f.risk === 'high' ? '#ef4444' : f.risk === 'elevated' ? '#f59e0b' : '#22c55e';
-        let stroke = 0.8;
+        let stroke = f.risk === 'high' ? 1.2 : f.risk === 'elevated' ? 0.8 : 0.4;
+        let animateTime = f.risk === 'high' ? 4000 : f.risk === 'elevated' ? 2500 : 1200;
         let status = f.status || 'active';
+        const initialGap = (index / flows.length) * 2;
 
         if (simulationResult) {
             if (status === 'disrupted') {
-                color = '#ef444466'; // ghost red
+                color = 'rgba(239, 68, 68, 0.4)'; // ghost red
                 stroke = 0.3;
             } else if (status === 'stressed') {
                 color = '#f59e0b';
@@ -84,6 +103,8 @@ const Index = () => {
             color,
             stroke,
             status,
+            animateTime,
+            initialGap,
             label: `${f.mineral}: ${f.country} → USA (${f.share}%)`,
             riskLevel: f.risk
         };
@@ -116,6 +137,11 @@ const Index = () => {
                         <p className="text-[10px] font-mono text-muted-foreground mt-2 line-clamp-3 italic opacity-70">
                            "{analysis.summary}"
                         </p>
+                        {analysis.agent_enriched === false && (
+                            <span className="text-[8px] font-mono text-muted-foreground/50 mt-0.5 block">
+                                Local analysis (agent unavailable)
+                            </span>
+                        )}
                     </div>
                 )}
 
@@ -127,6 +153,8 @@ const Index = () => {
                     onSimulate={handleSimulate}
                     onReset={handleResetScenario}
                     isSimulating={simulateMutation.isPending}
+                    onCustomScenario={handleCustomScenario}
+                    isCustomScenarioActive={isCustomStreaming}
                 />
             </div>
 
@@ -145,7 +173,7 @@ const Index = () => {
 
             {/* Right Panel: Agent Workflow */}
             <div className="col-span-3 row-span-6">
-                <AgentWorkflow steps={steps} isStreaming={isStreaming} />
+                <AgentWorkflow steps={isCustomStreaming ? customSteps : steps} isStreaming={isStreaming || isCustomStreaming} />
             </div>
 
             {/* Bottom: Risk Table */}

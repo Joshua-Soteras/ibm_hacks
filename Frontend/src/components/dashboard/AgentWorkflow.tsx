@@ -1,26 +1,66 @@
+import { useState } from "react";
+import { motion, AnimatePresence } from "framer-motion";
+import { ChevronDown } from "lucide-react";
 import type { AgentStepData } from "@/hooks/useAnalysisStream";
 
-const AgentStep = ({ step, isLast }: { step: AgentStepData; isLast: boolean }) => (
-    <div className="relative pl-6 pb-6 last:pb-2">
-        {!isLast && (
-            <div className="absolute left-[7px] top-[14px] bottom-0 w-[1px] bg-secondary/30" />
-        )}
-        <div className={`absolute left-0 top-[6px] w-3.5 h-3.5 rounded-full border-2 bg-background z-10
-            ${step.status === 'completed' ? 'border-risk-low' : step.status === 'active' ? 'border-agent-active animate-pulse' : 'border-secondary'}`}
-        />
-        <div className="flex flex-col gap-1">
-            <div className="flex items-center justify-between">
-                <span className={`text-[11px] font-semibold ${step.status === 'active' ? 'text-agent-active' : 'text-foreground'}`}>
-                    {step.title}
-                </span>
-                <span className="text-[9px] font-mono text-muted-foreground">{step.timestamp}</span>
+const AgentStep = ({ step, isLast }: { step: AgentStepData; isLast: boolean }) => {
+    const [expanded, setExpanded] = useState(false);
+    const hasFullOutput = !!step.full_output;
+
+    return (
+        <div className="relative pl-6 pb-6 last:pb-2">
+            {!isLast && (
+                <div className="absolute left-[7px] top-[14px] bottom-0 w-[1px] bg-secondary/30" />
+            )}
+            <div className={`absolute left-0 top-[6px] w-3.5 h-3.5 rounded-full border-2 bg-background z-10
+                ${step.status === 'completed' ? 'border-risk-low' : step.status === 'active' ? 'border-agent-active animate-pulse' : 'border-secondary'}`}
+            />
+            <div className="flex flex-col gap-1">
+                <div className="flex items-center justify-between">
+                    <span className={`text-[11px] font-semibold ${step.status === 'active' ? 'text-agent-active' : 'text-foreground'}`}>
+                        {step.title}
+                    </span>
+                    <span className="text-[9px] font-mono text-muted-foreground">{step.timestamp}</span>
+                </div>
+                <pre className="text-[9px] font-mono text-muted-foreground bg-secondary/10 p-2 rounded border border-secondary/20 leading-relaxed overflow-x-auto whitespace-pre-wrap">
+                    {step.trace}
+                </pre>
+                {hasFullOutput && (
+                    <>
+                        <button
+                            onClick={() => setExpanded(prev => !prev)}
+                            className="flex items-center gap-1 text-[8px] font-mono text-primary/70 hover:text-primary transition-colors self-start"
+                        >
+                            <motion.span
+                                animate={{ rotate: expanded ? 180 : 0 }}
+                                transition={{ duration: 0.2 }}
+                                className="inline-flex"
+                            >
+                                <ChevronDown className="w-3 h-3" />
+                            </motion.span>
+                            {expanded ? "Collapse" : "Show full output"}
+                        </button>
+                        <AnimatePresence>
+                            {expanded && (
+                                <motion.div
+                                    initial={{ height: 0, opacity: 0 }}
+                                    animate={{ height: "auto", opacity: 1 }}
+                                    exit={{ height: 0, opacity: 0 }}
+                                    transition={{ duration: 0.2 }}
+                                    className="overflow-hidden"
+                                >
+                                    <pre className="text-[9px] font-mono text-muted-foreground bg-secondary/10 p-2 rounded border border-primary/20 leading-relaxed overflow-x-auto whitespace-pre-wrap max-h-[300px] overflow-y-auto">
+                                        {step.full_output}
+                                    </pre>
+                                </motion.div>
+                            )}
+                        </AnimatePresence>
+                    </>
+                )}
             </div>
-            <pre className="text-[9px] font-mono text-muted-foreground bg-secondary/10 p-2 rounded border border-secondary/20 leading-relaxed overflow-x-auto whitespace-pre-wrap">
-                {step.trace}
-            </pre>
         </div>
-    </div>
-);
+    );
+};
 
 const AgentWorkflow = ({ steps, isStreaming }: { steps: AgentStepData[]; isStreaming: boolean }) => {
     const activeCount = steps.filter(s => s.status === 'active').length;
