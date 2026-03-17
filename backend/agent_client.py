@@ -196,12 +196,16 @@ def _try_agent_stream(company: str, scenario_text: str):
             if not useful:
                 display_text = "[Agent did not call tools] " + display_text
 
-            yield _emit({
+            reasoning_emit = {
                 "stage": "agent_reasoning",
                 "title": "Risk Orchestrator — Analysis Complete",
                 "status": "completed",
                 "trace": f"> Agent analysis complete\n> {display_text}",
-            })
+            }
+            if len(agent_text) > 600:
+                reasoning_emit["full_output"] = agent_text
+
+            yield _emit(reasoning_emit)
 
             # Now run local simulation for structured SimulationResult
             yield _emit({
@@ -627,12 +631,16 @@ def run_analysis_agent_generator(company: str):
         label = "Agent insight" if agent_useful else "Agent response (tools not called)"
         corp_trace += f"\n> {label}: {excerpt}"
 
-    yield _emit({
+    corp_emit = {
         "stage": "corporate_exposure",
         "title": "Corporate Exposure Agent",
         "status": "completed",
         "trace": corp_trace,
-    })
+    }
+    if agent_available and agent_completed and agent_text and len(agent_text) > 300:
+        corp_emit["full_output"] = agent_text
+
+    yield _emit(corp_emit)
 
     # Stage 4: orchestrator_scoring
     yield _emit({

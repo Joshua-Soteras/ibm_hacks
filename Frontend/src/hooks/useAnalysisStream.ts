@@ -7,6 +7,7 @@ export interface AgentStepData {
     status: "pending" | "active" | "completed";
     trace: string;
     timestamp: string;
+    full_output?: string;
 }
 
 const INITIAL_STEPS: AgentStepData[] = [
@@ -66,6 +67,7 @@ export function useAnalysisStream() {
                             status: data.status as "active" | "completed",
                             trace: data.trace || s.trace,
                             timestamp: now(),
+                            full_output: data.full_output || s.full_output,
                         };
                     }
                     return s;

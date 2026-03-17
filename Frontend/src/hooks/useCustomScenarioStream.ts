@@ -63,6 +63,7 @@ export function useCustomScenarioStream() {
                             status: data.status as "active" | "completed",
                             trace: data.trace || s.trace,
                             timestamp: now(),
+                            full_output: data.full_output || s.full_output,
                         };
                     }
                     return s;

@@ -59,13 +59,13 @@ Optional: `BACKEND_API_URL` — public URL of the FastAPI backend (e.g. ngrok tu
 - **CompanySelector** — dropdown to pick a company for analysis
 - **MetricsPanel** — risk score, trade concentration, corporate exposure, substitutability; shows disrupted scores + delta during simulation
 - **GlobeView** — 3D globe with supply arcs colored by risk level; supports disrupted/stressed/active arc states during simulation
-- **AgentWorkflow** — real-time agent execution timeline streamed via SSE from `/api/analyze-stream/{company}`
+- **AgentWorkflow** — real-time agent execution timeline streamed via SSE from `/api/analyze-stream/{company}`; expandable full agent output on steps with truncated content (animated expand/collapse)
 - **ScenariosPanel** — dynamic disruption scenario cards generated from trade concentration data; click-to-simulate with reset; custom free-text scenario input that invokes the cloud agent
 - **RiskTable** — sortable trade flow table with concentration bars (click column headers to sort)
 
 **Key Frontend Files:**
-- `src/hooks/useAnalysisStream.ts` — SSE hook using `EventSource` API, manages 4-step agent workflow state
-- `src/hooks/useCustomScenarioStream.ts` — SSE hook for free-text custom scenario analysis via `/api/custom-scenario-stream/{company}`
+- `src/hooks/useAnalysisStream.ts` — SSE hook using `EventSource` API, manages 4-step agent workflow state; `AgentStepData` includes optional `full_output` for untruncated agent text
+- `src/hooks/useCustomScenarioStream.ts` — SSE hook for free-text custom scenario analysis via `/api/custom-scenario-stream/{company}`; stores `full_output` from SSE events
 - `src/lib/api.ts` — Axios API client with TypeScript interfaces (`ScenarioCard`, `SimulationResult`)
 - `src/data/countryCoords.json` — ~130 country centroid coordinates for globe arc rendering
 - `src/data/simulatedData.ts` — legacy mock data (no longer imported by any component)
@@ -104,7 +104,7 @@ Optional: `BACKEND_API_URL` — public URL of the FastAPI backend (e.g. ngrok tu
 - `get_risk_summary(company, mineral)` — company-centric or mineral-centric risk summary (ADK tool callback)
 - `lookup_edgar_cik(company)` — CIK lookup from EDGAR data (ADK tool callback)
 
-**`agent_client.py`** — IBM Watson Orchestrate RunClient integration for invoking the deployed `risk_orchestrator` agent. Uses IAM authentication, agent UUID resolution, and polling for run completion. Falls back to keyword-based extraction + local `simulate_company_disruption()` if the agent is unavailable. Powers both `/api/analyze-stream/{company}` (concurrent agent + local analytics) and `/api/custom-scenario-stream/{company}` (agent-only with simulation). Includes apology/refusal detection (`_is_agent_useful()`) — when the cloud LLM returns conversational refusals instead of tool outputs, the local analytics summary is preserved and the result includes `agent_enriched: false`.
+**`agent_client.py`** — IBM Watson Orchestrate RunClient integration for invoking the deployed `risk_orchestrator` agent. Uses IAM authentication, agent UUID resolution, and polling for run completion. Falls back to keyword-based extraction + local `simulate_company_disruption()` if the agent is unavailable. Powers both `/api/analyze-stream/{company}` (concurrent agent + local analytics) and `/api/custom-scenario-stream/{company}` (agent-only with simulation). Includes apology/refusal detection (`_is_agent_useful()`) — when the cloud LLM returns conversational refusals instead of tool outputs, the local analytics summary is preserved and the result includes `agent_enriched: false`. SSE events include `full_output` field with untruncated agent text when the response exceeds the display truncation threshold (300 chars for standard analysis, 600 chars for custom scenarios).
 
 **`analytics.py`** includes `resolve_company_name()` which normalizes company names for callback endpoints. Handles LLM-reformulated names (e.g., "Amazon.com Inc" → "AMAZON COM INC") by stripping punctuation and doing case-insensitive matching against the DB.
 
