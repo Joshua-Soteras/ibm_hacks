@@ -1,63 +1,68 @@
-"""Tool to query USITC import volume data for critical minerals."""
+"""Tool to query import volume data for critical minerals from the database."""
 
 import json
-from pathlib import Path
 from typing import Optional
 
-import pandas as pd
 from ibm_watsonx_orchestrate.agent_builder.tools import tool
 
-DATA_DIR = Path(__file__).resolve().parent.parent.parent / "data" / "usitc"
-
-MINERAL_FILES = {
-    "gallium": "gallium_imports.csv",
-    "germanium": "germanium_imports.csv",
-    "tungsten": "tungsten_imports.csv",
-    "cobalt": "cobalt_imports.csv",
-    "rare_earths": "rare_earths_imports.csv",
-}
+from ._db import get_db_conn
 
 
 @tool()
 def query_import_volumes(mineral_name: str, year: Optional[int] = None) -> str:
-    """Query USITC import volumes for a critical mineral, grouped by source country.
+    """Query import volumes for a critical mineral, grouped by source country.
 
     Args:
-        mineral_name: Name of the mineral (gallium, germanium, tungsten, cobalt, rare_earths).
+        mineral_name: Name of the mineral (e.g. gallium, germanium, tungsten, cobalt, rare earths).
         year: Optional year to filter data. If omitted, returns all available years.
 
     Returns:
-        JSON string with an array of {country, total_value_usd, total_quantity_kg, share_pct}
-        objects sorted by value descending.
+        JSON string with {mineral, year, trade_flows} where trade_flows is an
+        array of {country, total_value_usd, share_pct} sorted by value descending.
     """
-    key = mineral_name.lower().replace(" ", "_")
-    filename = MINERAL_FILES.get(key)
-    if filename is None:
-        return json.dumps({"error": f"Unknown mineral: {mineral_name}. Valid options: {list(MINERAL_FILES.keys())}"})
+    conn = get_db_conn()
+    try:
+        cursor = conn.cursor()
 
-    csv_path = DATA_DIR / filename
-    if not csv_path.exists():
-        return json.dumps({"error": f"Data file not found: {csv_path}"})
+        if year is not None:
+            cursor.execute(
+                'SELECT Country, SUM("Customs Value (USD)") as total_value '
+                'FROM trade_data WHERE Mineral LIKE ? AND Year = ? '
+                'GROUP BY Country ORDER BY total_value DESC',
+                (f"%{mineral_name}%", year),
+            )
+        else:
+            cursor.execute(
+                'SELECT Country, SUM("Customs Value (USD)") as total_value '
+                'FROM trade_data WHERE Mineral LIKE ? '
+                'GROUP BY Country ORDER BY total_value DESC',
+                (f"%{mineral_name}%",),
+            )
 
-    df = pd.read_csv(csv_path)
-    if df.empty:
-        return json.dumps({"mineral": key, "year": year, "trade_flows": [], "note": "No data available yet"})
+        rows = cursor.fetchall()
 
-    if year is not None:
-        df = df[df["Year"] == year]
+        if not rows:
+            return json.dumps({
+                "mineral": mineral_name.lower(),
+                "year": year,
+                "trade_flows": [],
+                "note": "No trade data found for this mineral.",
+            })
 
-    grouped = (
-        df.groupby("Country")
-        .agg(total_value_usd=("Import_Value_USD", "sum"), total_quantity_kg=("Import_Quantity_KG", "sum"))
-        .reset_index()
-        .sort_values("total_value_usd", ascending=False)
-    )
+        total = sum(r["total_value"] for r in rows)
+        trade_flows = []
+        for r in rows:
+            val = r["total_value"]
+            trade_flows.append({
+                "country": r["Country"],
+                "total_value_usd": val,
+                "share_pct": round(val / total * 100, 2) if total > 0 else 0.0,
+            })
 
-    total_value = grouped["total_value_usd"].sum()
-    grouped["share_pct"] = round(grouped["total_value_usd"] / total_value * 100, 2) if total_value > 0 else 0.0
-
-    return json.dumps({
-        "mineral": key,
-        "year": year,
-        "trade_flows": grouped.to_dict(orient="records"),
-    })
+        return json.dumps({
+            "mineral": mineral_name.lower(),
+            "year": year,
+            "trade_flows": trade_flows,
+        })
+    finally:
+        conn.close()
