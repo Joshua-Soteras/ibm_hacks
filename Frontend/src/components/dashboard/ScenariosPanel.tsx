@@ -1,22 +1,52 @@
 import { motion } from "framer-motion";
-import { scenarios } from "@/data/simulatedData";
+import type { ScenarioCard } from "@/lib/api";
 
-const Sparkline = ({ data }: { data: number[] }) => {
-    const max = Math.max(...data);
-    const min = Math.min(...data);
-    const range = max - min || 1;
-    const h = 24;
-    const w = 80;
-    const points = data.map((v, i) => `${(i / (data.length - 1)) * w},${h - ((v - min) / range) * h}`).join(' ');
+interface ScenariosPanelProps {
+    scenarios: ScenarioCard[];
+    isLoading: boolean;
+    activeScenarioId: string | null;
+    onSimulate: (scenario: ScenarioCard) => void;
+    onReset: () => void;
+    isSimulating: boolean;
+}
 
-    return (
-        <svg width={w} height={h} className="overflow-visible">
-            <polyline points={points} fill="none" stroke="currentColor" strokeWidth="1.5" />
-        </svg>
-    );
-};
+const ConcentrationBar = ({ pct }: { pct: number }) => (
+    <div className="w-16 h-4 bg-secondary/20 rounded-sm overflow-hidden relative">
+        <div
+            className={`h-full rounded-sm ${pct > 70 ? 'bg-risk-high' : pct > 40 ? 'bg-risk-mid' : 'bg-risk-low'}`}
+            style={{ width: `${Math.min(pct, 100)}%` }}
+        />
+        <span className="absolute inset-0 flex items-center justify-center text-[8px] font-mono text-foreground">
+            {pct.toFixed(0)}%
+        </span>
+    </div>
+);
 
-const ScenariosPanel = () => {
+const ScenariosPanel = ({ scenarios, isLoading, activeScenarioId, onSimulate, onReset, isSimulating }: ScenariosPanelProps) => {
+    if (isLoading) {
+        return (
+            <div className="flex flex-col gap-3">
+                <h3 className="text-[10px] text-muted-foreground uppercase font-bold tracking-widest px-1">Probable Scenarios</h3>
+                <div className="card-surface p-4 flex items-center justify-center">
+                    <span className="text-[10px] font-mono text-muted-foreground animate-pulse">Loading scenarios...</span>
+                </div>
+            </div>
+        );
+    }
+
+    if (scenarios.length === 0) {
+        return (
+            <div className="flex flex-col gap-3">
+                <h3 className="text-[10px] text-muted-foreground uppercase font-bold tracking-widest px-1">Probable Scenarios</h3>
+                <div className="card-surface p-4 flex items-center justify-center">
+                    <span className="text-[10px] font-mono text-muted-foreground">
+                        {scenarios.length === 0 ? 'Select a company to view scenarios' : 'No high-concentration scenarios found'}
+                    </span>
+                </div>
+            </div>
+        );
+    }
+
     return (
         <motion.div
             initial={{ opacity: 0, x: -20 }}
@@ -24,27 +54,38 @@ const ScenariosPanel = () => {
             transition={{ duration: 0.4, delay: 0.1, ease: [0.2, 0, 0, 1] }}
             className="flex flex-col gap-3"
         >
-            <h3 className="text-[10px] text-muted-foreground uppercase font-bold tracking-widest px-1">Probable Scenarios</h3>
+            <div className="flex items-center justify-between px-1">
+                <h3 className="text-[10px] text-muted-foreground uppercase font-bold tracking-widest">Probable Scenarios</h3>
+                {activeScenarioId && (
+                    <button
+                        onClick={onReset}
+                        className="text-[9px] font-mono text-primary hover:text-primary/80 px-2 py-0.5 rounded bg-primary/10 hover:bg-primary/20 transition-colors"
+                    >
+                        Reset
+                    </button>
+                )}
+            </div>
             {scenarios.map((s) => (
                 <div
                     key={s.id}
-                    className={`card-surface p-3 risk-border-${s.impact} cursor-pointer hover:bg-secondary/50 transition-colors duration-200`}
+                    onClick={() => !isSimulating && onSimulate(s)}
+                    className={`card-surface p-3 risk-border-${s.impact} cursor-pointer hover:bg-secondary/50 transition-all duration-200
+                        ${activeScenarioId === s.id ? 'ring-1 ring-primary bg-primary/5' : ''}
+                        ${isSimulating ? 'opacity-50 pointer-events-none' : ''}`}
                 >
                     <div className="flex items-start justify-between gap-2">
                         <div className="flex-1 min-w-0">
                             <h4 className="text-xs font-medium text-foreground truncate">{s.title}</h4>
                             <div className="flex items-center gap-3 mt-1.5">
                                 <span className="text-[10px] text-muted-foreground">
-                                    P: <span className="font-mono text-foreground">{s.probability}%</span>
+                                    {s.country} · <span className="font-mono text-foreground">{s.mineral}</span>
                                 </span>
-                                <span className={`text-[10px] font-mono ${s.costDelta > 0 ? 'text-risk-high' : 'text-risk-low'}`}>
-                                    {s.costDelta > 0 ? '+' : ''}{s.costDelta}M
+                                <span className={`text-[9px] font-mono px-1.5 py-0.5 rounded ${s.impact === 'high' ? 'bg-risk-high/10 text-risk-high' : 'bg-risk-mid/10 text-risk-mid'}`}>
+                                    {s.impact}
                                 </span>
                             </div>
                         </div>
-                        <div className={s.costDelta > 0 ? 'text-risk-high' : 'text-risk-low'}>
-                            <Sparkline data={s.sparkline} />
-                        </div>
+                        <ConcentrationBar pct={s.top_share_pct} />
                     </div>
                 </div>
             ))}

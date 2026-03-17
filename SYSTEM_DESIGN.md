@@ -271,7 +271,7 @@ The interface is a three-column layout optimized for projector demos:
 
 **Country highlighting:** Country polygons from Natural Earth GeoJSON are colored by their aggregate risk contribution. China glows red if it dominates multiple minerals. Polygons can be raised slightly off the globe surface (polygonAltitude) for high-risk countries, creating a subtle 3D emphasis.
 
-**Country coordinate mapping:** A pre-built JSON file maps country names to their geographic centroid lat/lng. This is a static lookup — only need coordinates for the ~30 countries that appear in USITC mineral import data.
+**Country coordinate mapping:** `Frontend/src/data/countryCoords.json` maps ~130 country names to their geographic centroid lat/lng. Covers all countries appearing in the USITC trade data. Missing countries fall back to `[0, 0]`.
 
 ### Globe Texture
 
@@ -286,25 +286,25 @@ Use the NASA Earth Night texture (dark globe) rather than the Blue Marble (brigh
 - Right panel shows placeholder: "Select a company to begin analysis"
 - No arcs, no country highlights
 
-**State: Loading (company selected)**
+**State: Loading (company selected)** *(implemented)*
 
-- Right panel: Agent activity feed begins streaming agent status messages
-- Globe: No arcs yet, continues rotating
-- Agent messages appear one by one with slight delays to show progression
-- Example messages: "Risk Orchestrator: Initiating analysis...", "Trade Intel Agent: Processing gallium import data...", "Corporate Exposure Agent: Searching NVIDIA 10-K filings..."
+- Right panel: AgentWorkflow streams real-time SSE events from `GET /api/analyze-stream/{company}`, showing 4 stages progressing through pending → active → completed
+- Globe: No arcs yet, loading overlay displayed
+- Agent trace messages update live: "Risk Orchestrator: Planning analysis...", "Trade Intelligence Agent: Querying trade flows...", "Corporate Exposure Agent: Scanning USGS supply risk data..."
 
-**State: Results (agents complete)**
+**State: Results (agents complete)** *(implemented)*
 
-- Globe: Arcs fade in one mineral at a time, camera auto-pans to center on the dominant trade route
-- Right panel: Score counter animates from 0 to the final score, breakdown bars fill in, 10-K summary text appears
-- Left panel: Mineral checkboxes update to show which minerals were found relevant
-- Transition takes approximately 1-2 seconds for visual impact
+- Globe: Trade flow arcs populate from source countries to USA, colored by risk level
+- Left panel: MetricsPanel shows composite score and breakdown (trade, corporate, substitutability)
+- Left panel: ScenariosPanel populates with dynamic scenario cards generated from concentrated trade flows (minerals with >30% single-country share)
+- Right panel: AgentWorkflow shows all 4 steps as completed with timestamps and trace data
 
-**State: Scenario Active (disruption simulated)**
+**State: Scenario Active (disruption simulated)** *(implemented)*
 
-- Globe: The disrupted arc (e.g., China gallium) fades to a ghost (low opacity, stops flowing). A pulsing red overlay appears on the disrupted country. Remaining arcs for that mineral swell and change to amber.
-- Right panel: Score counter animates from baseline to new score. Mitigation brief panel slides in below the score card with Granite-generated recommendations.
-- Transition takes approximately 2 seconds — this is the demo's climax moment
+- User clicks a scenario card (e.g., "Canada COPPER Export Ban") → triggers `POST /api/simulate`
+- Globe: Disrupted arc fades to ghost red (transparent, no dash animation). Stressed arcs (same mineral, other countries) thicken and turn amber. Active arcs (other minerals) unchanged.
+- Left panel: MetricsPanel shows disrupted scores with delta indicators (e.g., +5). ScenariosPanel highlights the active scenario card.
+- User clicks "Reset" to return to baseline scores and normal arc rendering.
 
 **State: Comparison (stretch goal)**
 
@@ -312,11 +312,15 @@ Use the NASA Earth Night texture (dark globe) rather than the Blue Marble (brigh
 - Right panel splits into two score cards side by side
 - Demonstrates that different companies have different exposure profiles
 
-### Frontend-to-Backend Communication
+### Frontend-to-Backend Communication *(implemented)*
 
-The React frontend communicates with the watsonx Orchestrate Developer Edition running locally at localhost:4321. The frontend sends natural language queries to the ADK's chat endpoint, and the orchestrator agent processes them.
+The React frontend communicates with the FastAPI backend at `localhost:8000` via three channels:
 
-The orchestrator agent's instructions specify that it must return results as structured JSON with a defined schema (company, minerals, trade_flows array, filing_summary, risk_score object). The frontend parses this JSON and maps it to globe arc data and score card data.
+1. **SSE streaming** (`EventSource` → `GET /api/analyze-stream/{company}`) — real-time agent workflow updates via `useAnalysisStream` hook
+2. **REST queries** (Axios + TanStack React Query) — company list, scenarios
+3. **REST mutations** (Axios + TanStack `useMutation`) — disruption simulation via `POST /api/simulate`
+
+The backend returns structured JSON with a defined schema (company, minerals, trade_flows array, score breakdown). The frontend maps trade flows to globe arc data using `countryCoords.json` for geographic coordinates.
 
 **Fallback plan:** If the live ADK integration is unreliable under hackathon time pressure, pre-compute results for 4-5 demo companies, store as static JSON files, and have the frontend load them with a simulated agent activity feed (timed message reveals). The agent logic should still work in a terminal demo to prove the architecture. Judges care about the architecture and demo experience — if agents work correctly in CLI and the frontend tells the right visual story, the project succeeds.
 

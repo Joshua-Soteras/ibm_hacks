@@ -1,6 +1,10 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
 from dotenv import load_dotenv
+import json
+import time
 import os
 
 load_dotenv()
@@ -71,6 +75,125 @@ def company_summary(company: str):
     if result:
         return {"company": company, "summary": result['summary']}
     return {"error": "Company not found"}, 404
+
+
+# --- SCENARIO & SIMULATION ENDPOINTS ---
+
+@app.get("/api/company/scenarios/{company}")
+def company_scenarios(company: str):
+    from analytics import get_company_scenarios
+    scenarios = get_company_scenarios(company)
+    return {"company": company, "scenarios": scenarios}
+
+
+class SimulateRequest(BaseModel):
+    company: str
+    country: str
+    mineral: str
+    disruption_pct: float = 100.0
+
+
+@app.post("/api/simulate")
+def simulate(req: SimulateRequest):
+    from analytics import simulate_company_disruption
+    result = simulate_company_disruption(req.company, req.country, req.mineral, req.disruption_pct)
+    if result is None:
+        return {"error": "Company not found"}, 404
+    return result
+
+
+# --- SSE STREAMING ENDPOINT ---
+
+@app.get("/api/analyze-stream/{company}")
+def analyze_stream(company: str):
+    def event_generator():
+        def emit(data: dict):
+            return f"data: {json.dumps(data)}\n\n"
+
+        from analytics import get_db_conn, _get_trade_data_for_company, _get_corporate_data_for_company, _normalize_hhi
+        import pandas as pd
+        import numpy as np
+
+        # Stage 1: Orchestrator planning
+        yield emit({"stage": "orchestrator_planning", "title": "Risk Orchestrator", "status": "active",
+                     "trace": f"> Planning analysis for {company}\n> Identifying mineral dependencies..."})
+        time.sleep(0.3)
+
+        try:
+            conn = get_db_conn()
+            query_filings = "SELECT * FROM edgar_filing_details WHERE Company LIKE ?"
+            company_filings = pd.read_sql_query(query_filings, conn, params=(f"%{company}%",))
+
+            if company_filings.empty:
+                yield emit({"stage": "complete", "result": None})
+                conn.close()
+                return
+
+            minerals = company_filings['Mineral'].unique().tolist()
+
+            yield emit({"stage": "orchestrator_planning", "title": "Risk Orchestrator", "status": "completed",
+                         "trace": f"> Found {len(minerals)} mineral dependencies\n> Dispatching sub-agents..."})
+            time.sleep(0.2)
+
+            # Stage 2: Trade Intel
+            yield emit({"stage": "trade_intel", "title": "Trade Intelligence Agent", "status": "active",
+                         "trace": f"> Querying trade flows for {len(minerals)} minerals\n> Computing HHI concentration indices..."})
+            time.sleep(0.3)
+
+            trade_data = _get_trade_data_for_company(company, conn, minerals)
+
+            yield emit({"stage": "trade_intel", "title": "Trade Intelligence Agent", "status": "completed",
+                         "trace": f"> Analyzed {len(trade_data['flows'])} trade routes\n> Computed {len(trade_data['hhis'])} HHI scores\n> Trade risk score: {round(trade_data['trade_score'])}"})
+            time.sleep(0.2)
+
+            # Stage 3: Corporate Exposure
+            yield emit({"stage": "corporate_exposure", "title": "Corporate Exposure Agent", "status": "active",
+                         "trace": f"> Scanning USGS supply risk data\n> Cross-referencing SEC filings..."})
+            time.sleep(0.3)
+
+            corp_data = _get_corporate_data_for_company(conn, minerals)
+
+            yield emit({"stage": "corporate_exposure", "title": "Corporate Exposure Agent", "status": "completed",
+                         "trace": f"> Corporate exposure score: {corp_data['corporate_score']}\n> Substitutability risk: {corp_data['subst_score']}"})
+            time.sleep(0.2)
+
+            # Stage 4: Orchestrator scoring
+            yield emit({"stage": "orchestrator_scoring", "title": "Risk Orchestrator — Scoring", "status": "active",
+                         "trace": "> Computing weighted composite score\n> Weights: trade 40%, corporate 35%, substitutability 25%"})
+            time.sleep(0.2)
+
+            trade_score = trade_data["trade_score"]
+            corporate_score = corp_data["corporate_score"]
+            subst_score = corp_data["subst_score"]
+            composite_score = round(trade_score * 0.40 + corporate_score * 0.35 + subst_score * 0.25)
+
+            summary = company_filings['Snippet'].iloc[0] if 'Snippet' in company_filings.columns else "No specific filing snippets found."
+
+            result = {
+                "company": company,
+                "score": composite_score,
+                "breakdown": {
+                    "trade": round(trade_score),
+                    "corporate": round(corporate_score),
+                    "substitutability": round(subst_score)
+                },
+                "minerals": minerals,
+                "trade_flows": trade_data["flows"],
+                "summary": summary
+            }
+
+            yield emit({"stage": "orchestrator_scoring", "title": "Risk Orchestrator — Scoring", "status": "completed",
+                         "trace": f"> Composite risk score: {composite_score}\n> Analysis complete for {company}"})
+            time.sleep(0.1)
+
+            yield emit({"stage": "complete", "result": result})
+            conn.close()
+
+        except Exception as e:
+            yield emit({"stage": "error", "error": str(e)})
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
 if __name__ == "__main__":

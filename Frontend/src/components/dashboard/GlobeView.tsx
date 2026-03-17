@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState } from "react";
-import { supplyRoutes } from "@/data/simulatedData";
 
 const GlobeView = ({ arcs }: { arcs: any[] }) => {
     const globeRef = useRef<any>(null);
@@ -37,10 +36,14 @@ const GlobeView = ({ arcs }: { arcs: any[] }) => {
 
     const arcsData = arcs.length > 0 ? arcs : [];
 
-    const pointsData = supplyRoutes.flatMap((r: any) => [
-        { lat: r.startLat, lng: r.startLng, color: r.color, size: r.riskLevel === 'high' ? 0.6 : 0.3, label: r.label.split(' → ')[0] },
-        { lat: r.endLat, lng: r.endLng, color: r.color, size: r.riskLevel === 'high' ? 0.6 : 0.3, label: r.label.split(' → ')[1] },
+    // Derive points from arcs prop
+    const pointsData = arcsData.flatMap((r: any) => [
+        { lat: r.startLat, lng: r.startLng, color: r.color, size: r.riskLevel === 'high' ? 0.6 : 0.3, label: r.label?.split(' → ')[0] || '' },
+        { lat: r.endLat, lng: r.endLng, color: r.color, size: r.riskLevel === 'high' ? 0.6 : 0.3, label: r.label?.split(' → ')[1] || '' },
     ]);
+
+    const criticalCount = arcsData.filter((a: any) => a.riskLevel === 'high').length;
+    const routeCount = arcsData.length;
 
     if (!Globe) {
         return (
@@ -60,10 +63,10 @@ const GlobeView = ({ arcs }: { arcs: any[] }) => {
                 backgroundColor="rgba(0,0,0,0)"
                 arcsData={arcsData}
                 arcColor="color"
-                arcStroke={0.8}
+                arcStroke={(d: any) => d.stroke || 0.8}
                 arcDashLength={0.5}
                 arcDashGap={0.5}
-                arcDashAnimateTime={2000}
+                arcDashAnimateTime={(d: any) => d.status === 'disrupted' ? 0 : 2000}
                 arcLabel="label"
                 pointsData={pointsData}
                 pointLat="lat"
@@ -79,7 +82,9 @@ const GlobeView = ({ arcs }: { arcs: any[] }) => {
             <div className="absolute top-4 left-4 right-4 flex items-start justify-between pointer-events-none">
                 <div>
                     <h2 className="text-sm font-medium text-foreground">Global Supply Network</h2>
-                    <p className="text-[10px] font-mono text-muted-foreground mt-0.5">6 active routes · 2 critical alerts</p>
+                    <p className="text-[10px] font-mono text-muted-foreground mt-0.5">
+                        {routeCount} active route{routeCount !== 1 ? 's' : ''} · {criticalCount} critical alert{criticalCount !== 1 ? 's' : ''}
+                    </p>
                 </div>
                 <div className="flex gap-3">
                     {[
