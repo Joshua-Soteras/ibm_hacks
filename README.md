@@ -16,7 +16,7 @@ Roq is a hackathon project built for IBM that surfaces hidden mineral supply cha
 
 ## Demo
 
-> <a href = https://docs.google.com/presentation/d/1PLwCnWXeAwBH3DNUQnuxMnW83VDSmdfodx-XNTys2fg/edit?usp=sharing> Slides + Demo Video </a>
+<a href ="https://docs.google.com/presentation/d/1PLwCnWXeAwBH3DNUQnuxMnW83VDSmdfodx-XNTys2fg/edit?usp=sharing"> Slides + Demo Video </a>
 
 ---
 
