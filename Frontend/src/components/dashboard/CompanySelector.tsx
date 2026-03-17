@@ -1,4 +1,4 @@
-import { ChevronDown } from 'lucide-react';
+import { ChevronDown, Search } from 'lucide-react';
 
 interface CompanySelectorProps {
     companies: string[];
@@ -9,16 +9,19 @@ interface CompanySelectorProps {
 const CompanySelector = ({ companies, onSelect, selectedCompany }: CompanySelectorProps) => {
     return (
         <div className="space-y-2">
-            <label className="text-[10px] text-muted-foreground uppercase font-bold tracking-widest pl-1">
-                Select Analyze Target
-            </label>
+            <div className="flex items-center gap-1.5 pl-1">
+                <Search size={9} className="text-muted-foreground" />
+                <label className="text-[10px] text-muted-foreground uppercase font-bold tracking-widest">
+                    Analyze Target
+                </label>
+            </div>
             <div className="relative group">
                 <select
                     value={selectedCompany || ""}
                     onChange={(e) => onSelect(e.target.value)}
-                    className="w-full h-9 bg-secondary/20 hover:bg-secondary/30 border border-secondary/40 rounded-md px-3 text-xs text-foreground appearance-none cursor-pointer focus:outline-none focus:ring-1 focus:ring-primary/50 transition-all duration-200"
+                    className="w-full h-10 bg-secondary/20 hover:bg-secondary/40 border border-secondary/40 hover:border-primary/40 rounded-lg px-3 pr-8 text-xs text-foreground appearance-none cursor-pointer focus:outline-none focus:ring-1 focus:ring-primary/50 focus:border-primary/50 transition-all duration-200"
                 >
-                    <option value="" disabled className="bg-background">Select a company...</option>
+                    <option value="" disabled className="bg-background text-muted-foreground">Select a company...</option>
                     {companies.map((company) => (
                         <option key={company} value={company} className="bg-background py-2">
                             {company}
@@ -26,9 +29,12 @@ const CompanySelector = ({ companies, onSelect, selectedCompany }: CompanySelect
                     ))}
                 </select>
                 <div className="absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none text-muted-foreground group-hover:text-foreground transition-colors">
-                    <ChevronDown size={14} />
+                    <ChevronDown size={13} />
                 </div>
             </div>
+            {companies.length === 0 && (
+                <p className="text-[9px] font-mono text-muted-foreground/60 pl-1">Connecting to backend...</p>
+            )}
         </div>
     );
 };

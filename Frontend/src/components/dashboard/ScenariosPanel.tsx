@@ -1,16 +1,34 @@
 import { motion } from "framer-motion";
 
-const Sparkline = ({ data }: { data: number[] }) => {
+const Sparkline = ({ data, positive }: { data: number[]; positive: boolean }) => {
     const max = Math.max(...data);
     const min = Math.min(...data);
     const range = max - min || 1;
-    const h = 24;
-    const w = 80;
-    const points = data.map((v, i) => `${(i / (data.length - 1)) * w},${h - ((v - min) / range) * h}`).join(' ');
+    const w = 100;
+    const h = 36;
+    const pts = data.map((v, i) => [
+        (i / (data.length - 1)) * w,
+        h - ((v - min) / range) * (h - 4) - 2
+    ]);
+    const polyline = pts.map(([x, y]) => `${x},${y}`).join(' ');
+    const area = [
+        `0,${h}`,
+        ...pts.map(([x, y]) => `${x},${y}`),
+        `${w},${h}`
+    ].join(' ');
+    const stroke = positive ? '#ef4444' : '#22c55e';
+    const fillId = `fill-${Math.random().toString(36).slice(2)}`;
 
     return (
-        <svg width={w} height={h} className="overflow-visible">
-            <polyline points={points} fill="none" stroke="currentColor" strokeWidth="1.5" />
+        <svg width={w} height={h} className="overflow-visible flex-shrink-0">
+            <defs>
+                <linearGradient id={fillId} x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor={stroke} stopOpacity="0.25" />
+                    <stop offset="100%" stopColor={stroke} stopOpacity="0" />
+                </linearGradient>
+            </defs>
+            <polygon points={area} fill={`url(#${fillId})`} />
+            <polyline points={polyline} fill="none" stroke={stroke} strokeWidth="1.5" strokeLinejoin="round" strokeLinecap="round" />
         </svg>
     );
 };
@@ -47,14 +65,12 @@ const ScenariosPanel = ({ scenarios }: { scenarios: any[] }) => {
                                 <span className="text-[10px] text-muted-foreground">
                                     P: <span className="font-mono text-foreground">{s.probability}%</span>
                                 </span>
-                                <span className={`text-[10px] font-mono ${s.costDelta > 0 ? 'text-risk-high' : 'text-risk-low'}`}>
-                                    {s.costDelta > 0 ? '+' : ''}{s.costDelta}M
+                                <span className={`text-[10px] font-mono font-semibold ${s.costDelta > 0 ? 'text-risk-high' : 'text-risk-low'}`}>
+                                    {s.costDelta > 0 ? '+' : ''}${s.costDelta}M
                                 </span>
                             </div>
                         </div>
-                        <div className={s.costDelta > 0 ? 'text-risk-high' : 'text-risk-low'}>
-                            <Sparkline data={s.sparkline} />
-                        </div>
+                        <Sparkline data={s.sparkline} positive={s.costDelta > 0} />
                     </div>
                 </div>
             ))}

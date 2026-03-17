@@ -28,11 +28,8 @@ const GlobeView = ({ arcs }: { arcs: any[] }) => {
         if (globeRef.current) {
             globeRef.current.pointOfView({ lat: 20, lng: 100, altitude: 2.5 }, 1000);
             setIsFocused(false);
-            
             const controls = globeRef.current.controls();
-            if (controls) {
-                controls.autoRotate = true;
-            }
+            if (controls) controls.autoRotate = true;
         }
     }, []);
 
@@ -50,51 +47,37 @@ const GlobeView = ({ arcs }: { arcs: any[] }) => {
 
     const handleArcClick = (arc: any) => {
         if (globeRef.current) {
-            // Focus on the origin (source country)
-            globeRef.current.pointOfView({ 
-                lat: arc.startLat, 
-                lng: arc.startLng, 
-                altitude: 0.8 
-            }, 1000);
-            
+            globeRef.current.pointOfView({ lat: arc.startLat, lng: arc.startLng, altitude: 0.8 }, 1000);
             setIsFocused(true);
-            
-            // Disable auto-rotate when focused
             const controls = globeRef.current.controls();
-            if (controls) {
-                controls.autoRotate = false;
-            }
+            if (controls) controls.autoRotate = false;
         }
     };
 
     const arcsData = arcs.length > 0 ? arcs : [];
-
-    // Derive points from arcs to show origins and destination (USA)
     const pointsData = arcs.flatMap((arc: any) => [
-        { 
-            lat: arc.startLat, 
-            lng: arc.startLng, 
-            color: arc.color, 
-            size: arc.riskLevel === 'high' ? 0.6 : 0.3, 
-            label: arc.label.split(': ')[1]?.split(' → ')[0],
-            arcData: arc
-        },
-        { 
-            lat: arc.endLat, 
-            lng: arc.endLng, 
-            color: arc.color, 
-            size: 0.1, 
-            label: "USA",
-            arcData: arc
-        },
+        { lat: arc.startLat, lng: arc.startLng, color: arc.color, size: arc.riskLevel === 'high' ? 0.6 : 0.3, label: arc.label.split(': ')[1]?.split(' → ')[0], arcData: arc },
+        { lat: arc.endLat, lng: arc.endLng, color: arc.color, size: 0.1, label: "USA", arcData: arc },
     ]);
 
     const criticalCount = arcs.filter(a => a.riskLevel === 'high').length;
 
     if (!Globe) {
         return (
-            <div ref={containerRef} className="w-full h-full flex items-center justify-center">
-                <span className="text-[10px] font-mono text-agent-active animate-pulse">Initializing spatial view...</span>
+            <div ref={containerRef} className="w-full h-full flex flex-col items-center justify-center gap-4 relative overflow-hidden">
+                {/* Grid background */}
+                <div className="absolute inset-0 opacity-[0.04]"
+                    style={{
+                        backgroundImage: 'linear-gradient(rgba(255,255,255,0.8) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,0.8) 1px, transparent 1px)',
+                        backgroundSize: '40px 40px'
+                    }}
+                />
+                <div className="relative w-16 h-16 flex items-center justify-center">
+                    <div className="absolute inset-0 rounded-full border border-primary/20 animate-ping" style={{ animationDuration: '2s' }} />
+                    <div className="absolute inset-2 rounded-full border border-primary/30 animate-ping" style={{ animationDuration: '2s', animationDelay: '0.3s' }} />
+                    <div className="w-8 h-8 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+                </div>
+                <span className="text-[10px] font-mono text-primary/70 uppercase tracking-widest relative">Initializing spatial view...</span>
             </div>
         );
     }
@@ -126,18 +109,19 @@ const GlobeView = ({ arcs }: { arcs: any[] }) => {
                 atmosphereColor="hsl(217, 91%, 60%)"
                 atmosphereAltitude={0.15}
             />
-            
+
             {/* Header overlay */}
             <div className="absolute top-4 left-4 right-4 flex items-start justify-between pointer-events-none">
-                <div className="flex flex-col gap-2">
-                    <div>
-                        <h2 className="text-sm font-medium text-foreground">Global Supply Network</h2>
-                        <p className="text-[10px] font-mono text-muted-foreground mt-0.5">
-                            {arcs.length} active routes · {criticalCount} critical alerts
-                        </p>
-                    </div>
+                <div className="flex flex-col gap-1">
+                    <h2 className="text-sm font-medium text-foreground">Global Supply Network</h2>
+                    <p className="text-[10px] font-mono text-muted-foreground">
+                        {arcs.length > 0
+                            ? <><span className="text-foreground font-semibold">{arcs.length}</span> active routes · <span className={criticalCount > 0 ? 'text-risk-high font-semibold' : 'text-muted-foreground'}>{criticalCount} critical</span></>
+                            : 'No routes loaded — select a company'
+                        }
+                    </p>
                 </div>
-                
+
                 <div className="flex flex-col items-end gap-3">
                     <div className="flex gap-3 pointer-events-auto bg-background/40 backdrop-blur-md p-2 rounded-lg border border-secondary/20">
                         {[
@@ -154,7 +138,7 @@ const GlobeView = ({ arcs }: { arcs: any[] }) => {
 
                     <div className="flex gap-2 pointer-events-auto">
                         {isFocused && (
-                            <button 
+                            <button
                                 onClick={resetView}
                                 className="flex items-center gap-1.5 px-2 py-1 bg-secondary/20 hover:bg-secondary/40 border border-secondary/40 rounded-md text-[9px] text-foreground transition-all animate-in fade-in zoom-in duration-200"
                             >
@@ -169,11 +153,11 @@ const GlobeView = ({ arcs }: { arcs: any[] }) => {
                     </div>
                 </div>
             </div>
-            
-            {/* Interaction Toast */}
+
+            {/* Hint toast */}
             {!isFocused && arcs.length > 0 && (
-                <div className="absolute bottom-4 left-1/2 -translate-x-1/2 px-3 py-1.5 bg-background/60 backdrop-blur-md border border-secondary/20 rounded-full pointer-events-none animate-bounce-subtle">
-                    <span className="text-[9px] text-muted-foreground font-mono">Click a vector line to focus source region</span>
+                <div className="absolute bottom-4 left-1/2 -translate-x-1/2 px-3 py-1.5 bg-background/60 backdrop-blur-md border border-secondary/20 rounded-full pointer-events-none">
+                    <span className="text-[9px] text-muted-foreground font-mono">Click a route to focus source region</span>
                 </div>
             )}
         </div>
