@@ -339,7 +339,9 @@ def simulate_company_disruption(company_name, country, mineral, disruption_pct=1
 
     # Uplift corporate score by 15 (capped at 100) per system design
     new_corporate = min(baseline_corporate + 15, 100)
-    new_subst = baseline_subst
+
+    # Substitutability uplift: losing supply makes finding substitutes harder
+    new_subst = min(round(baseline_subst + avg_gap * 0.5), 100)
 
     disrupted_score = round(new_trade_score * 0.40 + new_corporate * 0.35 + new_subst * 0.25)
     score_delta = disrupted_score - baseline_score
@@ -454,7 +456,9 @@ def simulate_multi_disruption(company_name, country, minerals_to_disrupt=None, d
     num_disrupted = len(minerals_to_disrupt)
     corporate_uplift = min(15 * num_disrupted, 100 - baseline_corporate)
     new_corporate = min(baseline_corporate + corporate_uplift, 100)
-    new_subst = baseline_subst
+
+    # Substitutability uplift: losing supply makes finding substitutes harder
+    new_subst = min(round(baseline_subst + avg_gap * 0.5), 100)
 
     disrupted_score = round(new_trade_score * 0.40 + new_corporate * 0.35 + new_subst * 0.25)
     score_delta = disrupted_score - baseline_score
