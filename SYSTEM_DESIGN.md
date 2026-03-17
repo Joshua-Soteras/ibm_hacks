@@ -1,14 +1,14 @@
-# MineralWatch — System Design Document
+# Roq — System Design Document
 
 ## Project Overview
 
-MineralWatch is a multi-agent AI application that assesses semiconductor companies' exposure to critical mineral supply chain disruptions. It combines U.S. government trade data, SEC corporate filings, and USGS mineral intelligence into a unified risk score, visualized on an interactive 3D globe.
+Roq is a multi-agent AI application that assesses semiconductor companies' exposure to critical mineral supply chain disruptions. It combines U.S. government trade data, SEC corporate filings, and USGS mineral intelligence into a unified risk score, visualized on an interactive 3D globe.
 
 **One-liner:** Multi-agent supply chain risk intelligence for critical semiconductor minerals — with scenario simulation for export disruption events.
 
 **Hackathon track:** Semiconductor Manufacturing — specifically the "AI agent that monitors supply chain risks and recommends mitigation strategies" use case.
 
-**IBM Stack:** watsonx Orchestrate ADK + Granite 3.3 8B Instruct + ADK Knowledge Bases + Langfuse
+**IBM Stack:** watsonx Orchestrate ADK + Groq-served gpt-oss-120b (120B params, fast inference with native tool-calling)
 
 ---
 
@@ -22,18 +22,19 @@ The core insight: no single public data source tells you "Company X has high gal
 
 ## Architecture Overview
 
-The application has three layers: a multi-agent backend (watsonx Orchestrate ADK), a data layer (three government data sources), and a React frontend with a 3D globe visualization.
+The application has three layers: a multi-agent backend (watsonx Orchestrate ADK), a data layer (SQLite database sourced from three government datasets), and a React frontend with a 3D globe visualization.
 
 ### High-Level Flow
 
 1. User selects a company from the frontend dropdown
-2. Frontend sends a query to the watsonx Orchestrate ADK backend
-3. The Risk Orchestrator agent dispatches two sub-agents in parallel
-4. Trade Intel Agent queries pre-downloaded USITC import data and computes country concentration
-5. Corporate Exposure Agent searches SEC EDGAR for the company's 10-K filings and extracts mineral mentions using Granite
+2. Frontend opens an SSE stream to the FastAPI backend
+3. Backend runs local analytics in parallel with the cloud agent (Risk Orchestrator via Watson Orchestrate)
+4. Trade Intel Agent queries trade data and computes country concentration
+5. Corporate Exposure Agent searches USGS/EDGAR data for the company's mineral exposure and supply risk
 6. Risk Orchestrator receives both outputs, computes a composite risk score, and returns structured JSON
-7. Frontend renders trade flow arcs on the 3D globe, displays the risk score, and shows the 10-K summary
+7. Frontend renders trade flow arcs on the 3D globe, displays the risk score, and shows the agent workflow timeline
 8. User can trigger disruption scenarios (e.g., China gallium export ban) which re-score and animate the globe
+9. User can enter free-text custom scenarios for agent-driven analysis
 
 ---
 
@@ -42,47 +43,47 @@ The application has three layers: a multi-agent backend (watsonx Orchestrate ADK
 ### Agent 1: Trade Intel Agent
 
 - **Orchestration style:** ReAct
-- **LLM:** watsonx/ibm/granite-3-8b-instruct
+- **LLM:** groq/openai/gpt-oss-120b
 - **Purpose:** Answers "Where does the US get its critical minerals, and how concentrated are those sources?"
 - **Collaborators:** None (leaf agent)
 
 **Tools:**
 
-- `query_import_volumes` — Reads pre-downloaded USITC CSV files filtered by HTS commodity code. Accepts a mineral name, maps it to the correct HTS code, loads the corresponding CSV with pandas, and returns import volumes grouped by country of origin for the requested time range.
-- `compute_herfindahl` — Takes the country-level import data and computes a Herfindahl-Hirschman Index (HHI) measuring concentration. The formula is: sum of squared market shares across all source countries. Returns a value between 0 and 1, where 1.0 means a single country supplies 100%.
-- `get_mineral_profile` — Queries the USGS knowledge base (RAG) for a given mineral and returns key facts: world production leaders, U.S. import reliance percentage, known substitutes, and strategic importance rating.
+- `query_import_volumes` — Queries the `trade_data` table in SQLite (or calls back to FastAPI in cloud mode) for import volumes by mineral, grouped by source country for a given year.
+- `compute_herfindahl` — Takes country-level import data and computes a Herfindahl-Hirschman Index (HHI) measuring concentration. Pure computation, no data access.
+- `get_mineral_profile` — Queries `usgs_minerals`, `edgar_summary`, and `edgar_blind_spot_analysis` tables (or the `/api/mineral/profile/{mineral}` callback) for USGS mineral data enriched with EDGAR context.
 
-**Output format:** JSON array of trade flow objects, each containing country name, mineral name, import volume in kg, percentage share of total US imports, and the HHI concentration index.
+**Output format:** JSON array of trade flow objects, each containing country name, mineral name, import volume in USD, percentage share of total US imports, and the HHI concentration index.
 
 ### Agent 2: Corporate Exposure Agent
 
 - **Orchestration style:** ReAct
-- **LLM:** watsonx/ibm/granite-3-8b-instruct
+- **LLM:** groq/openai/gpt-oss-120b
 - **Purpose:** Answers "Does this company depend on critical minerals, and do they acknowledge supply risk?"
 - **Collaborators:** None (leaf agent)
 
 **Tools:**
 
-- `search_edgar_10k` — Hits the SEC EDGAR full-text search API (efts.sec.gov/LATEST/search-index) with a query combining the company name or CIK number with mineral-related keywords. Filters to 10-K form type. Returns filing metadata including accession numbers and URLs to the full filing documents. This API is free, requires no authentication, and can be hit live during the demo.
-- `extract_mineral_dependencies` — Takes a filing URL from the EDGAR search results, fetches the filing HTML, and uses Granite to perform named entity recognition on the text. Identifies mentions of critical minerals (gallium, germanium, tungsten, cobalt, rare earths) and their context (risk factor section, supply chain discussion, etc.). Returns a list of mineral mentions with their surrounding context and the section of the filing they appear in.
-- `summarize_risk_section` — Takes the extracted filing text around mineral mentions and uses Granite to generate a concise 2-3 sentence summary of the company's disclosed supply chain risks related to critical minerals. This summary is displayed directly in the frontend.
+- `extract_mineral_dependencies` — Queries `edgar_mineral_company_matrix` (40 companies, direct presence/frequency) with fallback to `edgar_filing_details` (~1,020 companies by mineral mention). Returns mineral dependencies with severity ratings. Cloud mode calls `/api/company/dependencies/{company}`.
+- `summarize_risk_section` — Generates company-centric or mineral-centric risk summaries from `edgar_filing_details`, `edgar_blind_spot_analysis`, `edgar_summary`, and `usgs_minerals`. Accepts optional `mineral_name` param for mineral-focused mode. Cloud mode calls `/api/risk-summary`.
+- `search_edgar_10k` — Live SEC EDGAR full-text search API (efts.sec.gov) for real-time filing lookup. Uses `edgar_company_filings` table for CIK resolution. Supplemental freshness check on top of pre-scanned data.
 
-**Output format:** JSON object containing the company name, list of minerals mentioned in filings, number of filings with mentions, the generated risk summary text, and a corporate exposure score (0-1) based on frequency and severity of mentions.
+**Output format:** JSON object containing the company name, list of minerals mentioned in filings, the generated risk summary text, and a corporate exposure score based on frequency and severity of mentions.
 
 ### Agent 3: Risk Orchestrator
 
-- **Orchestration style:** Plan-Act
-- **LLM:** watsonx/ibm/granite-3-8b-instruct
+- **Orchestration style:** Plan-Act (planner)
+- **LLM:** groq/openai/gpt-oss-120b
 - **Purpose:** Coordinates the two sub-agents, combines their outputs into a composite risk score, and handles disruption scenario simulation.
 - **Collaborators:** trade_intel_agent, corporate_exposure_agent
 
 **Tools (orchestrator-level):**
 
-- `compute_composite_risk` — Takes the trade concentration data from Agent 1 and the corporate exposure data from Agent 2 and computes a weighted composite score from 0-100. Weighting formula described in the Risk Score section below.
-- `simulate_disruption` — Accepts a scenario definition (e.g., "China export ban on gallium") and re-computes the risk score with the specified country-mineral pair removed from the supply picture. Returns the updated score, the delta from baseline, and which remaining suppliers would absorb demand.
-- `generate_mitigation_brief` — Uses Granite to generate a short actionable mitigation plan based on the disruption scenario results. Includes specific recommendations like alternative supplier countries, strategic stockpile suggestions, and material substitution options. Sources its recommendations from the USGS knowledge base.
+- `compute_composite_risk` — Takes trade concentration data from Agent 1 and corporate exposure data from Agent 2 and computes a weighted composite score from 0-100. Uses piecewise HHI normalization based on DOJ/FTC thresholds.
+- `simulate_disruption` — Accepts a scenario definition (e.g., "China export ban on gallium") and re-computes the risk score with the specified country-mineral pair removed from the supply picture. Returns the updated score, the delta from baseline, and flow statuses (disrupted/stressed/active).
+- `generate_mitigation_brief` — Stub awaiting Granite LLM integration. Intended to generate actionable mitigation plans based on disruption scenario results.
 
-**Output format:** JSON object containing the company name, list of relevant minerals, array of trade flow objects (for globe rendering), the 10-K risk summary, the composite risk score with component breakdown, and optionally a scenario result with mitigation brief.
+**Output format:** JSON object containing the company name, list of relevant minerals, array of trade flow objects (for globe rendering), the risk summary, the composite risk score with component breakdown, and optionally a scenario result.
 
 ### Why Plan-Act for the Orchestrator
 
@@ -92,70 +93,35 @@ The workflow is predictable and sequential: gather trade data, gather corporate 
 
 ## Data Sources — Verified and Validated
 
+All data is stored in a single SQLite database (`data/mineralwatch.db`, ~3 MB) with 8 tables, migrated from source Excel files via `backend/migrate_to_db.py`.
+
 ### Source 1: USITC DataWeb (Trade Flow Data)
 
 - **URL:** https://dataweb.usitc.gov
-- **What it provides:** U.S. import volumes by HTS commodity code, broken down by source country, with monthly and annual granularity. Includes import value in USD and quantity in kg.
-- **Authentication:** Most queries can be performed without logging in. The API requires a Login.gov account with MFA and a bearer token.
-- **Format:** CSV download from the web interface, or JSON via the API.
+- **What it provides:** U.S. import volumes by HTS commodity code, broken down by source country, with annual granularity. Includes import value in USD (Customs Value).
+- **Storage:** `trade_data` table, indexed on `(Mineral, Country)`. Source: `data/usitc_clean.xlsx`.
+- **Columns:** Year, Mineral, Country, Customs Value (USD)
 
-**Hackathon strategy: PRE-DOWNLOAD CSVs.** Do not attempt to use the API live. The Login.gov account setup and the complex JSON query format will waste time during the hackathon. Instead, before the hackathon, go to dataweb.usitc.gov, manually run import queries for each target mineral with all countries selected, and download the results as CSV files. Store these in a /data directory in the project.
+### Source 2: SEC EDGAR (Corporate Filing Data)
 
-**HTS codes to pre-download (VERIFY THESE ON THE LIVE SITE BEFORE THE HACKATHON — codes get reclassified):**
-
-- Gallium: 2804.80 (unwrought gallium — previously classified under 2805.40)
-- Germanium: 8112.99 (unwrought germanium and articles thereof)
-- Tungsten: 8101 (tungsten ores, concentrates, powders, bars)
-- Cobalt: 8105 (cobalt ores, mattes, intermediates)
-- Rare earths: 2846 (compounds of rare earth metals)
-
-**Query parameters to use:** Trade type = U.S. Imports for Consumption, Classification = HTS, Time range = 2020-2025, Countries = All countries individually (not aggregated), Output = CSV with quantity and value columns.
-
-**Expected CSV structure:**
-
-| Year | Month | Country | HTS_Code | Commodity_Description | Import_Value_USD | Import_Quantity_KG |
-|------|-------|---------|----------|----------------------|-----------------|-------------------|
-| 2024 | 12 | China | 2804.80 | Gallium unwrought | 48500000 | 51200 |
-| 2024 | 12 | Canada | 2804.80 | Gallium unwrought | 890000 | 520 |
-
-### Source 2: SEC EDGAR Full-Text Search (Corporate Filing Data)
-
-- **URL:** https://efts.sec.gov/LATEST/search-index
-- **What it provides:** Full-text search across all EDGAR filings since 2001. Returns filing metadata (accession number, company name, filing date, form type) and URLs to the full filing documents.
-- **Authentication:** NONE. This is a free, public, no-auth API run by the SEC.
-- **Format:** JSON response from GET requests.
-
-**Hackathon strategy: USE LIVE.** This is the one data source that should be queried in real-time during the demo. It is fast, free, and makes the demo more impressive.
-
-**How to query it:** Send a GET request with query parameters:
-
-- `q` = search terms (e.g., "gallium arsenide" or "rare earth supply")
-- `forms` = form type filter (e.g., "10-K")
-- `dateRange` = "custom" with `startdt` and `enddt` parameters
-- Optionally filter by company CIK number
-
-The response returns an array of filing objects with URLs to the actual HTML filing documents on sec.gov/Archives/. The agent then fetches the filing HTML and uses Granite to find and extract the relevant paragraphs.
-
-**Additionally, for structured company data:** The SEC provides a RESTful API at data.sec.gov that returns company submission history as JSON with no authentication required. Use this to look up CIK numbers and recent filings: https://data.sec.gov/submissions/CIK{10-digit-cik}.json
-
-**Pre-stage for hackathon:** Build a small lookup table mapping demo company names to their CIK numbers:
-
-- NVIDIA: 1045810
-- Intel: 50863
-- TSMC: 1046179
-- Texas Instruments: 97476
-- Qualcomm: 804328
+- **URL:** https://efts.sec.gov/LATEST/search-index (full-text search), https://data.sec.gov (structured API)
+- **What it provides:** Filing metadata, mineral mentions in 10-K forms, company-mineral dependency matrices, and blind spot analysis.
+- **Storage:** Five tables sourced from `data/edgar_mineral_results.xlsx`:
+  - `edgar_filing_details` — Mineral mentions by company with form type and text snippets
+  - `edgar_summary` — Per-mineral aggregates (EDGAR hits, unique companies, risk alignment)
+  - `edgar_mineral_company_matrix` — 40 companies × 45 mineral columns (presence/frequency)
+  - `edgar_blind_spot_analysis` — Minerals with supply risk but low EDGAR disclosure
+  - `edgar_company_filings` — Company CIK mappings and filing metadata
+- **Live supplement:** `search_edgar_10k` tool hits the SEC EDGAR API in real-time for freshness checks
 
 ### Source 3: USGS Mineral Commodity Summaries (Mineral Reference Data)
 
 - **URL:** https://pubs.usgs.gov/publication/mcs2026
-- **What it provides:** Two-page factsheets for 90+ minerals covering world production by country, U.S. import reliance percentage, substitutability assessments, price trends, strategic reserves, and government programs. The 2026 edition (covering 2025 data) is already published.
-- **Authentication:** NONE. Fully public, free PDF downloads.
-- **Format:** PDF (full report and individual mineral pages), plus CSV data tables.
+- **What it provides:** Supply risk ratings, top producers, substitutability assessments, fabrication stage classification, and HTS codes for 45+ semiconductor-critical minerals.
+- **Storage:** `usgs_minerals` table sourced from `data/Semiconductor_Minerals_USGS_Map_With_HTS.xlsx`.
+- **Key columns:** Fab Stage, Commodity Name, Supply Risk, Top Producer, HTS Code
 
-**Hackathon strategy: DOWNLOAD BEFORE THE HACKATHON AND UPLOAD AS ADK KNOWLEDGE BASE.** Download the individual mineral PDFs for the five target minerals from URLs like https://pubs.usgs.gov/periodicals/mcs2026/mcs2026-gallium.pdf. Upload these into the watsonx Orchestrate ADK as a knowledge base. This gives agents RAG access to answer questions about substitutability, world production leaders, and import reliance without needing to parse PDFs at runtime.
-
-**Also download the CSV data tables** from the USGS Science Data Catalog. These contain structured tabular data (production by country, year-over-year changes) that can be loaded directly by Python tools.
+**Note:** Some column names contain literal newlines (e.g., `"USGS Commodity Name\n(exact CSV name)"`). The shared `USGS_COL` constant in `_db.py` handles this. Matrix mineral columns use UPPERCASE with qualifiers (e.g., `"DIAMOND (INDUSTRIAL)*"`) — use `strip_mineral_qualifier()` before USGS lookups.
 
 ---
 
@@ -167,7 +133,7 @@ No single data source tells you "NVIDIA has high gallium exposure AND gallium is
 
 **Signal 2 — Country-level trade concentration (USITC):** The trade data tells us where the US gets each mineral. This is country-level, not company-level. It answers "98% of US gallium imports come from China" regardless of which company we are analyzing.
 
-**Signal 3 — Company-level risk disclosure (SEC EDGAR):** The 10-K filings tell us whether a specific company mentions these minerals in their risk factors or supply chain disclosures. This is the company-specific signal. If NVIDIA's 10-K mentions "gallium arsenide substrates" in their risk factors section, that is evidence of dependency.
+**Signal 3 — Company-level risk disclosure (SEC EDGAR):** The filing data tells us whether a specific company mentions these minerals in their risk factors or supply chain disclosures. The `edgar_mineral_company_matrix` provides direct presence data for 40 companies; `edgar_filing_details` extends coverage to ~1,020 companies via mention-based analysis.
 
 **What the agents infer:** The composite risk score combines these three signals. A company gets a high score when: (a) the minerals it depends on are highly concentrated in one source country, (b) the company explicitly acknowledges this dependency in its filings, and (c) the USGS data indicates low substitutability.
 
@@ -184,40 +150,48 @@ The composite risk score is a number from 0-100 computed as a weighted combinati
 Based on the Herfindahl-Hirschman Index (HHI) of country-of-origin concentration for each mineral the company depends on.
 
 - HHI = sum of (country_share ^ 2) for all source countries
-- Range: 0 to 1 (1.0 = single source)
-- If a company depends on multiple minerals, take the weighted average HHI across all relevant minerals, weighted by the mineral's strategic importance from USGS data
+- Normalized to 0-100 via piecewise DOJ/FTC thresholds:
+  - 0–1500 → 0–30 (unconcentrated)
+  - 1500–2500 → 30–60 (moderately concentrated)
+  - 2500–5000 → 60–85 (highly concentrated)
+  - 5000–10000 → 85–100 (extremely concentrated)
+- If a company depends on multiple minerals, the average HHI is computed across all relevant minerals
 
 ### Corporate Exposure (35% weight)
 
-Based on how prominently the company discloses mineral supply risks in its SEC filings.
+Based on severity-weighted USGS supply risk scores per mineral the company depends on.
 
-- Count the number of 10-K filings (out of recent 3-5 years) that mention critical minerals
-- Weight mentions in "Risk Factors" section higher than mentions in general discussion
-- Normalize to 0-1 range based on mention frequency and section severity
-- A company that mentions "gallium" in risk factors scores higher than one that mentions it in a general industry overview
+- Draws from USGS supply risk ratings: LOW=20, MODERATE=50, HIGH=70, CRITICAL=90
+- Weighted by mineral severity for the company
+- Normalized to 0-100
 
 ### Substitutability Risk (25% weight)
 
 Based on USGS assessments of whether alternative materials exist for semiconductor applications.
 
-- Derived from USGS Mineral Commodity Summaries text on each mineral
-- Gallium in III-V semiconductors: low substitutability (score ~0.8)
-- Tungsten in certain applications: moderate substitutability (score ~0.5)
-- Normalize to 0-1 range
+- Derived from the same USGS supply risk ratings
+- LOW=20, MODERATE=50, HIGH=70, CRITICAL=90
+- Normalized to 0-100
 
 ### Composite Calculation
 
-composite_score = round((trade_concentration * 0.40 + corporate_exposure * 0.35 + substitutability_risk * 0.25) * 100)
+```
+composite_score = round(trade_concentration * 0.40 + corporate_exposure * 0.35 + substitutability_risk * 0.25)
+```
 
 ### Scenario Re-scoring
 
 When a disruption scenario is triggered (e.g., "China export ban on gallium"):
 
-1. Remove the banned country from the trade data for the specified mineral
-2. Recalculate the HHI on remaining countries (concentration may increase or decrease depending on how remaining supply is distributed)
-3. Increase the corporate exposure component by a fixed uplift factor (0.15) to reflect heightened risk
+1. Remove the banned country from the trade data for the specified mineral(s)
+2. Recalculate the HHI on remaining countries — trade score is floored at baseline (disruption can never improve it) plus a supply gap penalty
+3. Increase the corporate exposure component by a fixed uplift (15 per mineral disrupted, capped at 100)
 4. Recalculate the composite score
-5. Return the delta (new score minus baseline score)
+5. Return the delta (new score minus baseline score) and flow statuses (disrupted/stressed/active)
+
+**Multi-mineral disruption:** `simulate_multi_disruption()` handles scenarios where multiple minerals from a single country are disrupted simultaneously (e.g., "China bans all mineral exports"). Scales corporate uplift by `15 × num_minerals`.
+
+**Custom scenario extraction:** Free-text scenario input is parsed by `_extract_country_mineral()` which detects broad patterns ("all minerals", "all exports") returning `["__ALL__"]` sentinel, or collects individually matched minerals. `_infer_disruption_pct()` parses scenario severity: "ban/embargo/block/halt/stop" → 100%, "restrict/limit/reduce" → 50%, default 75%.
 
 ---
 
@@ -225,250 +199,362 @@ When a disruption scenario is triggered (e.g., "China export ban on gallium"):
 
 ### Technology Stack
 
-- React (functional components with hooks)
+- React 19 (functional components with hooks)
+- TypeScript + Vite (with `@` → `./src` path alias)
+- TailwindCSS v4 (utility styling)
 - react-globe.gl (3D globe visualization, built on Three.js)
-- Tailwind CSS (utility styling)
-- react-countup or requestAnimationFrame (score animation)
-- Natural Earth 110m GeoJSON (country polygon data, free)
-- NASA Blue Marble or Earth Night texture (globe background)
+- shadcn/ui (Radix primitives)
+- Framer Motion (animations)
+- Axios + TanStack React Query (data fetching)
+- react-markdown (agent output rendering)
+- IBM Plex fonts
+- Dark theme with risk-level color coding (red/amber/green)
 
-### Layout: Three-Panel Design
+### Layout: 12-Column Grid Dashboard
 
-The interface is a three-column layout optimized for projector demos:
+The interface is a 12-column, 6-row grid layout (`gap-4`) optimized for projector demos:
 
-**Left Panel (~200px, fixed width):**
+**Left Column (`col-span-3 row-span-6`):**
 
-- Company selector dropdown (pre-populated with 4-5 demo companies)
-- Mineral filter checkboxes (gallium, germanium, tungsten, cobalt, rare earths — all checked by default)
-- Scenario simulation buttons ("Simulate: China Gallium Ban", "Simulate: China Germanium Ban", "Simulate: Russia Cobalt Ban")
-- Compare button to add a second company for side-by-side analysis (stretch goal)
+- **CompanySelector** — Dropdown to pick a company for analysis (dynamically loaded from backend `GET /companies`)
+- **MetricsPanel** — Composite risk score with animated value transitions, trade concentration, corporate exposure, and substitutability breakdown. Hover tooltips on each metric explaining its computation. Risk Score value color-coded by severity (red >70, amber 30–70, green <30). Shows disrupted scores with delta indicators during simulation.
+- **ScenariosPanel** — Dynamic disruption scenario cards generated from trade concentration data (minerals with >30% single-country share). Click-to-simulate with reset. Custom free-text scenario input that invokes the cloud agent via SSE.
 
-**Center Panel (flex, takes remaining space):**
+**Center Globe (`col-span-6 row-span-4`):**
 
-- 3D interactive globe (react-globe.gl)
-- Globe slowly auto-rotates on load, stops when user interacts
-- Trade flow arcs rendered on the globe surface
-- Country polygons highlighted by risk level
-- Globe camera auto-focuses on the dominant trade route when arcs load
+- **GlobeView** — 3D interactive globe with supply route arcs colored by risk level:
+  - Arc thickness proportional to risk: high=1.2, elevated=0.8, low=0.4
+  - Arc animation speed inversely proportional to risk: high=4s slow, elevated=2.5s, low=1.2s fast
+  - Staggered arc launches via `arcDashInitialGap`
+  - Disrupted/stressed/active arc states during simulation (disrupted uses `rgba()` for transparent colors)
+  - Expandable legend with line-thickness explanations and disruption states
+  - Arc speed multiplier control (0.5x–2x) in bottom-right corner
 
-**Right Panel (~320px, fixed width):**
+**Bottom Table (`col-span-6 row-span-2`):**
 
-- Risk score card with animated counter (0-100)
-- Score breakdown bars showing the three components (trade concentration, corporate exposure, substitutability)
-- 10-K finding summary (Granite-generated text from the corporate exposure agent)
-- Agent activity feed showing real-time status of each agent's work
-- Mitigation brief panel (appears after scenario simulation, slides in from bottom)
+- **RiskTable** — Sortable trade flow table with concentration bars (click column headers to sort). Threshold markers at 30% and 70% on concentration bars. Disrupted/stressed flow count badges in header during simulation.
+
+**Right Column (`col-span-3 row-span-6`):**
+
+- **AgentWorkflow** — Real-time agent execution timeline streamed via SSE from `/api/analyze-stream/{company}`. Shows 4 stages: orchestrator_planning → trade_intel → corporate_exposure → orchestrator_scoring → complete. Expandable full agent output on steps with truncated content (animated expand/collapse). Markdown rendering for agent output.
 
 ### Globe Visualization Details
 
 **Arc rendering:** Each arc represents a trade flow from a mineral-producing country to the United States. The arc properties encode data:
 
-- **Thickness (stroke):** Proportional to that country's share of US imports for the mineral. A country supplying 98% of imports has a visually dominant thick arc. A country supplying 1% has a barely visible thin arc.
+- **Thickness (stroke):** Proportional to risk level. High-risk arcs (>50% share) are visually dominant.
 - **Color:** Encodes risk level. Red (#ef4444) for critical concentration (share > 50%), Amber (#f59e0b) for elevated (share > 20%), Green (#22c55e) for low concentration.
-- **Animation:** Arcs use dash animation to create a "flowing" effect from source country toward the US. The dominant arc flows faster, reinforcing the visual weight.
+- **Animation:** Arcs use dash animation to create a "flowing" effect from source country toward the US. Higher-risk arcs flow slower (conveying danger/weight), lower-risk arcs flow faster.
 
-**Arc data structure:** Each arc object contains: startLat, startLng (source country centroid), endLat, endLng (Washington DC as US anchor point), mineral name, volume in kg, percentage share, risk level string, and stroke width.
-
-**Country highlighting:** Country polygons from Natural Earth GeoJSON are colored by their aggregate risk contribution. China glows red if it dominates multiple minerals. Polygons can be raised slightly off the globe surface (polygonAltitude) for high-risk countries, creating a subtle 3D emphasis.
-
-**Country coordinate mapping:** `Frontend/src/data/countryCoords.json` maps ~130 country names to their geographic centroid lat/lng. Covers all countries appearing in the USITC trade data. Missing countries fall back to `[0, 0]`.
+**Country coordinate mapping:** `Frontend/src/data/countryCoords.json` maps ~130 country names to their geographic centroid lat/lng. Covers all countries appearing in the USITC trade data.
 
 ### Globe Texture
 
-Use the NASA Earth Night texture (dark globe) rather than the Blue Marble (bright blue). The dark background makes colored arcs and country highlights pop dramatically on a projector screen. The arcs become glowing colored rivers on a dark surface, which is much more visually striking.
+Uses a dark earth texture — the dark background makes colored arcs and country highlights pop dramatically on a projector screen. Glowing colored arcs on a dark surface have significantly more visual impact than the same arcs on a bright blue background.
 
 ### UX State Machine
 
 **State: Empty (app load)**
 
 - Globe auto-rotates slowly
-- Left panel shows company dropdown with placeholder text "Select a company"
-- Right panel shows placeholder: "Select a company to begin analysis"
-- No arcs, no country highlights
+- Left panel shows company dropdown with placeholder text
+- No arcs, no metrics displayed
 
-**State: Loading (company selected)** *(implemented)*
+**State: Loading (company selected)**
 
 - Right panel: AgentWorkflow streams real-time SSE events from `GET /api/analyze-stream/{company}`, showing 4 stages progressing through pending → active → completed
-- Globe: No arcs yet, loading overlay displayed
-- Agent trace messages update live: "Risk Orchestrator: Planning analysis...", "Trade Intelligence Agent: Querying trade flows...", "Corporate Exposure Agent: Scanning USGS supply risk data..."
+- Globe: Loading overlay displayed
+- Agent trace messages update live: "Risk Orchestrator: Planning analysis...", "Trade Intelligence Agent: Querying trade flows...", etc.
 
-**State: Results (agents complete)** *(implemented)*
+**State: Results (agents complete)**
 
 - Globe: Trade flow arcs populate from source countries to USA, colored by risk level
 - Left panel: MetricsPanel shows composite score and breakdown (trade, corporate, substitutability)
-- Left panel: ScenariosPanel populates with dynamic scenario cards generated from concentrated trade flows (minerals with >30% single-country share)
+- Left panel: ScenariosPanel populates with dynamic scenario cards generated from concentrated trade flows
 - Right panel: AgentWorkflow shows all 4 steps as completed with timestamps and trace data
+- Bottom: RiskTable shows sortable trade flow data
 
-**State: Scenario Active (disruption simulated)** *(implemented)*
+**State: Scenario Active (disruption simulated)**
 
-- User clicks a scenario card (e.g., "Canada COPPER Export Ban") → triggers `POST /api/simulate`
+- User clicks a scenario card → triggers `POST /api/simulate`
 - Globe: Disrupted arc fades to ghost red (transparent, no dash animation). Stressed arcs (same mineral, other countries) thicken and turn amber. Active arcs (other minerals) unchanged.
 - Left panel: MetricsPanel shows disrupted scores with delta indicators (e.g., +5). ScenariosPanel highlights the active scenario card.
 - User clicks "Reset" to return to baseline scores and normal arc rendering.
 
-**State: Comparison (stretch goal)**
+**State: Custom Scenario (free-text analysis)**
 
-- Globe shows arcs for two companies simultaneously, differentiated by mineral or color scheme
-- Right panel splits into two score cards side by side
-- Demonstrates that different companies have different exposure profiles
+- User enters a free-text scenario description in the ScenariosPanel input
+- SSE stream opens to `GET /api/custom-scenario-stream/{company}?scenario=` for agent-driven analysis
+- Cloud agent processes the scenario and returns simulation results
+- Same visual updates as Scenario Active state
 
-### Frontend-to-Backend Communication *(implemented)*
+### Frontend-to-Backend Communication
 
 The React frontend communicates with the FastAPI backend at `localhost:8000` via three channels:
 
 1. **SSE streaming** (`EventSource` → `GET /api/analyze-stream/{company}`) — real-time agent workflow updates via `useAnalysisStream` hook
-2. **REST queries** (Axios + TanStack React Query) — company list, scenarios
-3. **REST mutations** (Axios + TanStack `useMutation`) — disruption simulation via `POST /api/simulate`
+2. **SSE streaming** (`EventSource` → `GET /api/custom-scenario-stream/{company}`) — custom scenario analysis via `useCustomScenarioStream` hook
+3. **REST queries** (Axios + TanStack React Query) — company list, scenarios, mineral data
+4. **REST mutations** (Axios + TanStack `useMutation`) — disruption simulation via `POST /api/simulate`
 
 The backend returns structured JSON with a defined schema (company, minerals, trade_flows array, score breakdown). The frontend maps trade flows to globe arc data using `countryCoords.json` for geographic coordinates.
 
-**Fallback plan:** If the live ADK integration is unreliable under hackathon time pressure, pre-compute results for 4-5 demo companies, store as static JSON files, and have the frontend load them with a simulated agent activity feed (timed message reveals). The agent logic should still work in a terminal demo to prove the architecture. Judges care about the architecture and demo experience — if agents work correctly in CLI and the frontend tells the right visual story, the project succeeds.
-
 ### Color System
 
-Maintain consistent color language across all UI elements:
+Consistent color language across all UI elements:
 
 - Critical risk: Red (#ef4444) — arcs with >50% share, high-risk countries, danger indicators
 - Elevated risk: Amber (#f59e0b) — moderate concentration, stressed suppliers in scenario mode
 - Low risk: Green (#22c55e) — diversified supply, low concentration
-- Disrupted: Ghost red (rgba(239, 68, 68, 0.2)) — faded arcs for banned trade routes
+- Disrupted: Ghost red (rgba(239, 68, 68, 0.4)) — faded arcs for banned trade routes
 - Neutral: Slate/gray for UI chrome, text, borders
 
 Use this palette on arcs, country highlights, score card indicators, breakdown bars, and scenario buttons. A judge should be able to glance at the screen and understand the risk picture without reading text.
 
 ---
 
-## Observability
+## Backend Architecture
 
-Enable Langfuse integration via the ADK for full agent execution tracing. Start the developer edition with: `orchestrate server start -e .env -l`
+### FastAPI App (`main.py`)
 
-This provides:
+CORS configured for `localhost:5173`. Full endpoint list:
 
-- End-to-end traces of every agent execution showing the orchestrator dispatching to sub-agents
-- Individual LLM call traces showing Granite's input prompts and output responses
-- Tool call traces showing which Python functions were invoked with what arguments
-- Latency metrics for each step
-- Token usage per LLM call
+**Core endpoints:**
+- `GET /` — health check message
+- `GET /health` — status ok
+- `GET /companies` — list all companies in the DB
 
-During the demo, the Langfuse dashboard (localhost) can be shown briefly to demonstrate the audit trail: "Here's exactly how the agents reasoned through this risk assessment — every step is traceable." This matters for the governance angle and differentiates from a black-box approach.
+**Analysis endpoints:**
+- `GET /analyze/{company}` — full risk analysis (trade + corporate + substitutability scores)
+- `GET /api/analyze-stream/{company}` — SSE endpoint streaming staged analysis events (orchestrator_planning → trade_intel → corporate_exposure → orchestrator_scoring → complete)
+- `GET /api/custom-scenario-stream/{company}?scenario=` — SSE endpoint for free-text custom scenario analysis via cloud agent
+
+**Mineral & company data endpoints:**
+- `GET /api/minerals/list` — list all tracked minerals
+- `GET /api/company/minerals/{company}` — minerals for a specific company
+- `GET /api/mineral/risk/{mineral}` — trade concentration & supply risk for a mineral
+- `GET /api/company/summary/{company}` — company name + risk summary snippet
+- `GET /api/company/scenarios/{company}` — dynamic disruption scenarios based on trade concentration
+
+**Simulation:**
+- `POST /api/simulate` — accepts `{company, country, mineral, disruption_pct?}`, returns disrupted risk scores with flow statuses
+
+**ADK tool callback endpoints** (used by cloud-deployed tools via HTTP):
+- `GET /api/mineral/trade/{mineral}?year=` — import volumes by country for a mineral
+- `GET /api/mineral/profile/{mineral}` — structured USGS/EDGAR mineral profile
+- `GET /api/company/dependencies/{company}` — mineral dependencies with severity
+- `GET /api/risk-summary?company=&mineral=` — risk summary (company-centric or mineral-centric)
+- `GET /api/edgar/cik/{company}` — CIK lookup from EDGAR data
+
+**Diagnostics:**
+- `GET /api/agent-diagnostics` — debug endpoint: env var status, agent UUID resolution, callback reachability
+
+### Analytics Engine (`analytics.py`)
+
+Risk analysis engine querying `mineralwatch.db`. Key functions:
+
+- `resolve_company_name(name)` — normalizes company names for callback endpoints. Handles LLM-reformulated names (e.g., "Amazon.com Inc" → "AMAZON COM INC") by stripping punctuation and doing case-insensitive matching.
+- `_get_trade_data_for_company(company, conn, minerals)` — trade flows + HHI computation
+- `_get_corporate_data_for_company(conn, minerals)` — USGS-based corporate + substitutability scores
+- `analyze_company(company)` — full analysis combining both helpers
+- `get_company_scenarios(company)` — generates up to 5 disruption scenarios from concentrated trade flows (minerals with >30% single-country share)
+- `simulate_company_disruption(company, country, mineral, disruption_pct)` — single-mineral disruption
+- `simulate_multi_disruption(company, country, minerals_to_disrupt, disruption_pct)` — multi-mineral disruption
+- ADK callback helpers: `get_mineral_trade_flows()`, `get_mineral_profile_data()`, `get_company_dependencies()`, `get_risk_summary()`, `lookup_edgar_cik()`
+
+### Agent Client (`agent_client.py`)
+
+IBM Watson Orchestrate RunClient integration for invoking the deployed `risk_orchestrator` agent. Features:
+
+- IAM authentication with agent UUID resolution
+- Polling for run completion
+- Falls back to keyword-based extraction + local simulation if the agent is unavailable
+- Apology/refusal detection (`_is_agent_useful()`) — when the cloud LLM returns conversational refusals instead of tool outputs, the local analytics summary is preserved and the result includes `agent_enriched: false`
+- SSE events include `full_output` field with untruncated agent text when the response exceeds the display truncation threshold (300 chars for standard analysis, 600 chars for custom scenarios)
+
+---
+
+## ADK Tools (`backend/adk-project/tools/`)
+
+Tools support dual-mode data access: local SQLite (default) or HTTP callbacks to the FastAPI backend when `BACKEND_API_URL` is set (cloud deployment). The switch is controlled by `_api.py:is_api_mode()` which resolves the URL from either an Orchestrate `key_value_creds` connection (`app_id: backend_api`) or the `BACKEND_API_URL` env var.
+
+| Tool | Source Table(s) | Purpose |
+|------|----------------|---------|
+| `query_import_volumes` | `trade_data` | Import volumes by mineral & country |
+| `compute_herfindahl` | (pure computation) | HHI concentration index from trade flows |
+| `get_mineral_profile` | `usgs_minerals`, `edgar_summary`, `edgar_blind_spot_analysis` | USGS mineral data + EDGAR enrichment |
+| `extract_mineral_dependencies` | `edgar_mineral_company_matrix`, `edgar_filing_details`, `usgs_minerals` | Company mineral exposures with severity (matrix for 40 companies, filing_details fallback for ~1,020) |
+| `summarize_risk_section` | `edgar_filing_details`, `edgar_blind_spot_analysis`, `edgar_summary`, `usgs_minerals` | Company or mineral-centric risk summary with exposure score |
+| `compute_composite_risk` | `usgs_minerals` | Weighted composite score with piecewise HHI normalization |
+| `search_edgar_10k` | (live SEC EDGAR API) + `edgar_company_filings` for CIK lookup | Real-time filing search (supplemental freshness check) |
+| `simulate_disruption` | (pure computation) | Disruption scenario modeling |
+| `generate_mitigation_brief` | (stub, not wired to any agent) | Mitigation recommendations — awaiting Granite LLM |
+
+**Shared helpers** (local dev only — cloud tools inline these via try/except fallback):
+- `_db.py`: `get_db_conn()`, `strip_mineral_qualifier()`, `USGS_COL`, `DEFAULT_RISK_SCORE`
+- `_api.py`: `is_api_mode()`, `api_get()`, `BACKEND_CONNECTION` (credential declaration for `@tool()` decorators)
+
+**Cloud compatibility:** Each tool file wraps `_api`/`_db` imports in `try/except (ImportError, ModuleNotFoundError)` with inlined fallback definitions. Watson Orchestrate imports tools as standalone files (no access to sibling modules), so the fallback provides `BACKEND_CONNECTION`, `is_api_mode()`, `api_get()`, constants, and a `get_db_conn()` stub that raises `RuntimeError`.
+
+---
+
+## Cloud Deployment (IBM Watson Orchestrate)
+
+ADK tools are deployed to Watson Orchestrate cloud. Since the SQLite DB isn't available there, tools call back to the FastAPI backend via HTTP. Setup:
+
+```bash
+# 1. Create connection for backend URL
+orchestrate connections add --app-id backend_api
+orchestrate connections configure --app-id backend_api --env draft --kind key_value --type team
+orchestrate connections configure --app-id backend_api --env live --kind key_value --type team
+orchestrate connections set-credentials --app-id backend_api --env draft --entries "BACKEND_API_URL=https://your-backend-url"
+orchestrate connections set-credentials --app-id backend_api --env live --entries "BACKEND_API_URL=https://your-backend-url"
+
+# 2. Import tools with connection binding
+for t in query_import_volumes get_mineral_profile extract_mineral_deps summarize_risk_section search_edgar_10k compute_composite_risk; do
+  orchestrate tools import --file "tools/${t}.py" --kind python --app-id backend_api
+done
+
+# 3. Import and deploy agents
+orchestrate agents import --file agents/trade_intel_agent.yaml
+orchestrate agents import --file agents/corporate_exposure_agent.yaml
+orchestrate agents import --file agents/risk_orchestrator.yaml
+orchestrate agents deploy --name trade_intel_agent
+orchestrate agents deploy --name corporate_exposure_agent
+orchestrate agents deploy --name risk_orchestrator
+```
+
+For local dev with ngrok: set `BACKEND_API_URL` in `.env` and run ngrok on port 8000. The `_api.py` helper includes an `ngrok-skip-browser-warning` header to bypass the free-tier interstitial.
+
+---
+
+## Database (`data/mineralwatch.db`)
+
+SQLite database (~3 MB) with 8 tables, migrated from Excel via `backend/migrate_to_db.py`:
+
+| Table | Source | Key Columns |
+|-------|--------|-------------|
+| `usgs_minerals` | USGS spreadsheet | Fab Stage, Commodity Name, Supply Risk, Top Producer, HTS Code |
+| `trade_data` | USITC data | Year, Mineral, Country, Customs Value (USD) |
+| `edgar_filing_details` | EDGAR scan | Mineral, Company, CIK, Form, Snippet |
+| `edgar_summary` | EDGAR scan | Mineral, EDGAR Hits, Unique Companies, Risk Alignment |
+| `edgar_mineral_company_matrix` | EDGAR scan | Company × 45 mineral columns (presence/frequency) |
+| `edgar_blind_spot_analysis` | EDGAR scan | Mineral, Supply Risk, Assessment, Action |
+| `edgar_company_filings` | EDGAR scan | Company, CIK, Form, Filed, URL |
+| `edgar_scan_metadata` | EDGAR scan | Scan metadata |
+
+Indexed columns: `trade_data(Mineral, Country)`, `edgar_filing_details(Company, Mineral)`.
+
+Source Excel files in `data/`: `Semiconductor_Minerals_USGS_Map_With_HTS.xlsx`, `edgar_mineral_results.xlsx`, `usitc_clean.xlsx`.
 
 ---
 
 ## Project File Structure
 
 ```
-mineralwatch/
-├── .env                          # IBM Cloud API key, entitlement key, watsonx config
+roq/
+├── .env                              # IBM Cloud API keys, Orchestrate config, optional BACKEND_API_URL
+├── CLAUDE.md                         # Claude Code project instructions
+├── SYSTEM_DESIGN.md                  # This document
+├── README.md                         # Project overview and setup
 ├── data/
-│   ├── usitc/
-│   │   ├── gallium_imports.csv   # Pre-downloaded from USITC DataWeb
-│   │   ├── germanium_imports.csv
-│   │   ├── tungsten_imports.csv
-│   │   ├── cobalt_imports.csv
-│   │   └── rare_earths_imports.csv
-│   ├── usgs/
-│   │   ├── mcs2026-gallium.pdf   # Individual mineral summaries
-│   │   ├── mcs2026-germanium.pdf
-│   │   ├── mcs2026-tungsten.pdf
-│   │   ├── mcs2026-cobalt.pdf
-│   │   └── mcs2026-rare-earths.pdf
-│   └── reference/
-│       ├── country_coords.json    # Country name → lat/lng centroid mapping
-│       └── company_ciks.json      # Company name → SEC CIK number mapping
-├── agents/
-│   ├── trade_intel_agent.yaml     # Agent spec for trade intelligence
-│   ├── corporate_exposure_agent.yaml
-│   └── risk_orchestrator.yaml     # Orchestrator with collaborators defined
-├── tools/
-│   ├── query_import_volumes.py    # Reads USITC CSVs, returns trade flows
-│   ├── compute_herfindahl.py      # HHI concentration calculation
-│   ├── get_mineral_profile.py     # RAG query against USGS knowledge base
-│   ├── search_edgar_10k.py        # Hits efts.sec.gov live API
-│   ├── extract_mineral_deps.py    # Granite NER on filing text
-│   ├── summarize_risk_section.py  # Granite summarization
-│   ├── compute_composite_risk.py  # Weighted risk score formula
-│   ├── simulate_disruption.py     # Scenario re-scoring logic
-│   └── generate_mitigation.py     # Granite mitigation brief generation
-├── knowledge/
-│   └── usgs_minerals/             # PDFs uploaded as ADK knowledge base
-├── frontend/
+│   ├── mineralwatch.db               # SQLite database (~3 MB, 8 tables)
+│   ├── Semiconductor_Minerals_USGS_Map_With_HTS.xlsx
+│   ├── edgar_mineral_results.xlsx
+│   └── usitc_clean.xlsx
+├── backend/
+│   ├── main.py                       # FastAPI app with all endpoints
+│   ├── analytics.py                  # Risk analysis engine (queries mineralwatch.db)
+│   ├── agent_client.py               # Watson Orchestrate RunClient integration
+│   ├── migrate_to_db.py              # Excel → SQLite migration script
+│   ├── test_tools.py                 # ADK tool smoke tests (mocks IBM SDK)
+│   ├── requirements.txt              # Python dependencies
+│   ├── .venv/                        # Python virtual environment
+│   └── adk-project/
+│       ├── agents/
+│       │   ├── trade_intel_agent.yaml
+│       │   ├── corporate_exposure_agent.yaml
+│       │   └── risk_orchestrator.yaml
+│       └── tools/
+│           ├── _api.py               # Shared: dual-mode helper (local DB / HTTP callback)
+│           ├── _db.py                # Shared: SQLite connection, constants
+│           ├── query_import_volumes.py
+│           ├── compute_herfindahl.py
+│           ├── get_mineral_profile.py
+│           ├── extract_mineral_deps.py
+│           ├── summarize_risk_section.py
+│           ├── compute_composite_risk.py
+│           ├── search_edgar_10k.py
+│           ├── simulate_disruption.py
+│           └── generate_mitigation.py  # Stub — awaiting Granite LLM
+├── Frontend/
 │   ├── package.json
-│   ├── tailwind.config.js
+│   ├── vite.config.ts
+│   ├── tsconfig.json
 │   ├── public/
-│   │   └── earth-night.jpg        # NASA dark globe texture
+│   │   └── roq-icon.png
 │   └── src/
-│       ├── App.jsx                # Three-panel layout container
+│       ├── App.tsx
+│       ├── pages/
+│       │   └── Index.tsx             # Main dashboard (12-col grid layout)
 │       ├── components/
-│       │   ├── Globe.jsx          # react-globe.gl wrapper with arc rendering
-│       │   ├── CompanySelector.jsx
-│       │   ├── MineralFilters.jsx
-│       │   ├── RiskScoreCard.jsx  # Animated score + breakdown bars
-│       │   ├── FilingSummary.jsx  # 10-K finding display
-│       │   ├── AgentFeed.jsx      # Real-time agent activity stream
-│       │   ├── ScenarioControls.jsx
-│       │   └── MitigationBrief.jsx
+│       │   ├── CompanySelector.tsx
+│       │   ├── MetricsPanel.tsx      # Risk score + breakdown with tooltips
+│       │   ├── GlobeView.tsx         # 3D globe with arc rendering
+│       │   ├── AgentWorkflow.tsx     # SSE-driven agent execution timeline
+│       │   ├── ScenariosPanel.tsx    # Disruption scenario cards + custom input
+│       │   ├── RiskTable.tsx         # Sortable trade flow table
+│       │   └── ui/
+│       │       └── markdown.tsx      # Shared Markdown renderer
 │       ├── hooks/
-│       │   ├── useAgentQuery.js   # Manages ADK chat endpoint communication
-│       │   └── useGlobeData.js    # Transforms agent JSON output → arc objects
+│       │   ├── useAnalysisStream.ts  # SSE hook for /api/analyze-stream
+│       │   └── useCustomScenarioStream.ts  # SSE hook for custom scenarios
+│       ├── lib/
+│       │   └── api.ts               # Axios client + TypeScript interfaces
 │       └── data/
-│           ├── countryCoords.json # Static country coordinate lookup
-│           └── fallbackResults.json # Pre-computed results for demo fallback
-└── README.md
+│           ├── countryCoords.json    # ~130 country centroid coordinates
+│           └── simulatedData.ts      # Legacy mock data (unused)
+└── Frontend/index.html
 ```
-
----
-
-## Pre-Hackathon Checklist
-
-These tasks should be completed before the hackathon starts to avoid wasting build time on data wrangling:
-
-1. **USITC Data:** Go to dataweb.usitc.gov, run import queries for each of the 5 target minerals with all countries, download CSVs, verify they contain country, quantity, and value columns
-2. **USGS PDFs:** Download individual mineral summaries from pubs.usgs.gov for gallium, germanium, tungsten, cobalt, and rare earths (2026 edition)
-3. **USGS CSVs:** Download the structured data tables from the USGS Science Data Catalog for the same minerals
-4. **EDGAR Test:** Send a test GET request to efts.sec.gov/LATEST/search-index with a query like q="gallium"&forms=10-K to confirm the endpoint works and understand the JSON response format
-5. **CIK Lookup:** Confirm CIK numbers for demo companies (NVIDIA, Intel, TSMC, Texas Instruments, Qualcomm) via data.sec.gov
-6. **Country Coordinates:** Build the country_coords.json mapping for the ~30 countries that appear in USITC mineral trade data
-7. **IBM Cloud Account:** Set up the IBM Cloud account, get API keys, get the watsonx Orchestrate entitlement key
-8. **ADK Installation:** Install the watsonx Orchestrate ADK (pip install ibm-watsonx-orchestrate), verify Docker is running, test that `orchestrate server start` works
-9. **Globe Texture:** Download the NASA Earth Night texture image
-10. **Natural Earth GeoJSON:** Download the 110m country polygons dataset from Natural Earth for globe country highlighting
 
 ---
 
 ## Demo Script (3 Minutes)
 
 **0:00 — Context (15 seconds)**
-"Semiconductor supply chains depend on a handful of critical minerals. China controls 98% of gallium production. No tool maps how this concentration risk compounds across a specific company's supply chain. MineralWatch changes that."
+"Semiconductor supply chains depend on a handful of critical minerals. China controls 98% of gallium production. No tool maps how this concentration risk compounds across a specific company's supply chain. Roq changes that."
 
 **0:15 — Select Company (30 seconds)**
-Select NVIDIA from the dropdown. Point out the agent activity feed as both sub-agents begin working. "Our risk orchestrator dispatches two specialized agents — one analyzing US trade data, one searching NVIDIA's SEC filings."
+Select a company from the dropdown. Point out the AgentWorkflow panel as both sub-agents begin working. "Our risk orchestrator dispatches two specialized agents — one analyzing US trade data, one scanning USGS supply risk and SEC filings."
 
 **0:45 — Results Appear (45 seconds)**
-Arcs populate the globe. "See this thick red arc from China? That represents 98% of US gallium imports flowing from a single country. Our corporate exposure agent found that NVIDIA's latest 10-K explicitly identifies gallium arsenide substrate availability as a material risk." Point to the risk score: 82/100. Walk through the three breakdown components briefly.
+Arcs populate the globe. "See this thick red arc from China? That represents 98% of US gallium imports flowing from a single country. Our corporate exposure agent cross-references USGS supply risk data with SEC filing disclosures to identify material dependencies." Point to the risk score and walk through the three breakdown components. Show the RiskTable with sortable concentration bars.
 
 **1:30 — Scenario Simulation (45 seconds)**
-Click "Simulate: China Gallium Export Ban." The arc fades, score jumps to 96. "Watch — when we simulate a Chinese export ban, that trade route disappears. The remaining suppliers from Canada and Germany are stressed. Our AI generates specific mitigation recommendations: diversify to Canadian suppliers, increase strategic stockpile, evaluate GaN-on-Si alternatives."
+Click a scenario card (e.g., "China Gallium Export Ban"). The arc fades to ghost red, stressed arcs thicken, score jumps. "Watch — when we simulate a Chinese export ban, that trade route disappears. The remaining suppliers are stressed. Our metrics update in real-time showing the delta." Optionally type a custom free-text scenario to demonstrate agent-driven analysis.
 
 **2:15 — Architecture (30 seconds)**
-Briefly show the Langfuse trace. "Every agent decision is fully traceable. Three agents, each with specialized tools, orchestrated through IBM watsonx Orchestrate. The system uses Granite 3.3 for NLP extraction and summarization. All data sources are public US government data."
+"Three AI agents, each with specialized tools, orchestrated through IBM watsonx Orchestrate. The system uses three independent US government data sources — USITC trade data, SEC EDGAR filings, and USGS mineral intelligence — to build a picture no single source can provide. Every agent decision is traceable."
 
 **2:45 — Close (15 seconds)**
-"MineralWatch turns public data into actionable intelligence. It helps semiconductor companies prepare for supply chain disruptions before they happen, not after."
+"Roq turns public data into actionable intelligence. It helps semiconductor companies prepare for supply chain disruptions before they happen, not after."
 
 ---
 
 ## Key Technical Decisions and Rationale
 
-**Why pre-download USITC data instead of using the API live:** The USITC API requires Login.gov MFA setup and uses a complex JSON query format. During a 48-hour hackathon, this setup could take an hour and introduce fragile auth dependencies. Pre-downloaded CSVs are reliable, fast, and contain identical data.
+**Why SQLite instead of raw CSVs:** Pre-downloaded Excel files are migrated into a single SQLite database (`mineralwatch.db`) for fast indexed queries, JOIN support across data sources, and simpler deployment. The `migrate_to_db.py` script makes the migration reproducible.
 
-**Why hit EDGAR live instead of pre-downloading:** EDGAR's full-text search API is free, fast, and requires no authentication. Live queries make the demo more impressive and prove the system works with any company, not just pre-staged ones.
+**Why dual-mode tools (local DB + HTTP callbacks):** Watson Orchestrate cloud can't access the local SQLite file. Tools detect their environment via `_api.py:is_api_mode()` and either query the DB directly (local dev) or make HTTP callbacks to the FastAPI backend (cloud). Each tool file inlines fallback definitions for cloud compatibility since Orchestrate imports tools as standalone files.
 
-**Why Granite 3.3 8B instead of a larger model:** This is an IBM hackathon — using IBM's own model family is expected and appreciated. The 8B parameter size is sufficient for NER extraction, summarization, and recommendation generation. It is also fast enough for a live demo without noticeable latency.
+**Why Groq-served gpt-oss-120b instead of Granite:** The 120B parameter open-source model served via Groq provides fast inference with native tool-calling support that proved more reliable for multi-step agent reasoning than smaller models. The watsonx Orchestrate ADK platform handles the orchestration regardless of which LLM powers the agents.
 
 **Why Plan-Act for the orchestrator and ReAct for sub-agents:** The orchestrator's workflow is predictable (gather trade data → gather corporate data → score → optionally simulate), making Plan-Act appropriate. The sub-agents may need to iterate (try different EDGAR search queries, check multiple minerals) making ReAct's explore-observe-act loop more flexible.
 
-**Why react-globe.gl instead of a 2D map:** The 3D globe with animated arcs is the visual differentiator. It communicates geographic concentration risk instantly and creates a memorable demo moment. react-globe.gl handles WebGL rendering with a React-friendly API and can render 50+ arcs without performance issues.
+**Why react-globe.gl instead of a 2D map:** The 3D globe with animated arcs is the visual differentiator. It communicates geographic concentration risk instantly and creates a memorable demo moment. react-globe.gl handles WebGL rendering with a React-friendly API.
 
-**Why Earth Night texture instead of Blue Marble:** The dark globe makes colored arcs and country highlights dramatically more visible, especially on a projector in a hackathon presentation room. Glowing colored arcs on a dark surface have significantly more visual impact than the same arcs on a bright blue background.
+**Why dark globe texture:** The dark background makes colored arcs and country highlights dramatically more visible, especially on a projector in a hackathon presentation room. Glowing colored arcs on a dark surface have significantly more visual impact than the same arcs on a bright blue background.
 
-**Why Langfuse over watsonx.governance:** Langfuse provides immediate, visual observability traces that can be shown in a demo. watsonx.governance is a heavier enterprise product that requires more setup and is harder to demo in 3 minutes. Langfuse integration is built into the ADK with a single CLI flag.
+**Why concurrent local analytics + cloud agent:** The SSE streaming endpoint runs local analytics in parallel with the cloud agent call. Local analytics provide guaranteed fast results; the cloud agent enriches with additional reasoning when available. If the agent is slow or returns refusals, the local results are still complete.
+
+**Why apology/refusal detection:** Cloud LLMs sometimes return conversational responses ("I'd be happy to help...") instead of structured tool outputs. `_is_agent_useful()` detects these patterns so the system can fall back to local analytics gracefully, flagging results with `agent_enriched: false`.
