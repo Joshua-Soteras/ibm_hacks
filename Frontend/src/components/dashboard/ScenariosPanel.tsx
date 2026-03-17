@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { motion } from "framer-motion";
 import type { ScenarioCard } from "@/lib/api";
 
@@ -8,6 +9,8 @@ interface ScenariosPanelProps {
     onSimulate: (scenario: ScenarioCard) => void;
     onReset: () => void;
     isSimulating: boolean;
+    onCustomScenario?: (text: string) => void;
+    isCustomScenarioActive?: boolean;
 }
 
 const ConcentrationBar = ({ pct }: { pct: number }) => (
@@ -22,7 +25,16 @@ const ConcentrationBar = ({ pct }: { pct: number }) => (
     </div>
 );
 
-const ScenariosPanel = ({ scenarios, isLoading, activeScenarioId, onSimulate, onReset, isSimulating }: ScenariosPanelProps) => {
+const ScenariosPanel = ({ scenarios, isLoading, activeScenarioId, onSimulate, onReset, isSimulating, onCustomScenario, isCustomScenarioActive }: ScenariosPanelProps) => {
+    const [customText, setCustomText] = useState("");
+
+    const handleCustomSubmit = () => {
+        const trimmed = customText.trim();
+        if (trimmed && onCustomScenario) {
+            onCustomScenario(trimmed);
+            setCustomText("");
+        }
+    };
     if (isLoading) {
         return (
             <div className="flex flex-col gap-3">
@@ -54,7 +66,7 @@ const ScenariosPanel = ({ scenarios, isLoading, activeScenarioId, onSimulate, on
         >
             <div className="flex items-center justify-between px-1">
                 <h3 className="text-[10px] text-muted-foreground uppercase font-bold tracking-widest">Probable Scenarios</h3>
-                {activeScenarioId && (
+                {(activeScenarioId || isCustomScenarioActive) && (
                     <button
                         onClick={onReset}
                         className="text-[9px] font-mono text-primary hover:text-primary/80 px-2 py-0.5 rounded bg-primary/10 hover:bg-primary/20 transition-colors"
@@ -63,6 +75,26 @@ const ScenariosPanel = ({ scenarios, isLoading, activeScenarioId, onSimulate, on
                     </button>
                 )}
             </div>
+            {onCustomScenario && (
+                <div className="card-surface p-2.5 flex items-center gap-2">
+                    <input
+                        type="text"
+                        value={customText}
+                        onChange={(e) => setCustomText(e.target.value)}
+                        onKeyDown={(e) => e.key === "Enter" && handleCustomSubmit()}
+                        placeholder="Describe a custom scenario..."
+                        disabled={isSimulating || isCustomScenarioActive}
+                        className="flex-1 bg-transparent text-[11px] text-foreground placeholder:text-muted-foreground/50 outline-none font-mono disabled:opacity-50"
+                    />
+                    <button
+                        onClick={handleCustomSubmit}
+                        disabled={!customText.trim() || isSimulating || isCustomScenarioActive}
+                        className="text-[9px] font-mono text-primary hover:text-primary/80 px-2 py-1 rounded bg-primary/10 hover:bg-primary/20 transition-colors disabled:opacity-30 disabled:pointer-events-none"
+                    >
+                        Analyze
+                    </button>
+                </div>
+            )}
             {scenarios.map((s) => (
                 <div
                     key={s.id}

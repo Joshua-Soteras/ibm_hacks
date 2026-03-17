@@ -1,8 +1,9 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { fetchCompanies, fetchCompanyScenarios, simulateDisruption } from "@/lib/api";
 import type { ScenarioCard, SimulationResult } from "@/lib/api";
 import { useAnalysisStream } from "@/hooks/useAnalysisStream";
+import { useCustomScenarioStream } from "@/hooks/useCustomScenarioStream";
 import MetricsPanel from "@/components/dashboard/MetricsPanel";
 import ScenariosPanel from "@/components/dashboard/ScenariosPanel";
 import GlobeView from "@/components/dashboard/GlobeView";
@@ -19,6 +20,7 @@ const Index = () => {
     const [simulationResult, setSimulationResult] = useState<SimulationResult | null>(null);
 
     const { steps, isStreaming, analysisResult, startStream } = useAnalysisStream();
+    const { customSteps, isCustomStreaming, customResult, startCustomStream, resetCustom } = useCustomScenarioStream();
     const analysis = analysisResult;
     const isAnalyzing = isStreaming;
 
@@ -54,7 +56,22 @@ const Index = () => {
     const handleResetScenario = () => {
         setActiveScenario(null);
         setSimulationResult(null);
+        resetCustom();
     };
+
+    const handleCustomScenario = (text: string) => {
+        if (!selectedCompany) return;
+        setActiveScenario(null);
+        setSimulationResult(null);
+        startCustomStream(selectedCompany, text);
+    };
+
+    // Apply custom scenario result when it arrives
+    useEffect(() => {
+        if (customResult) {
+            setSimulationResult(customResult);
+        }
+    }, [customResult]);
 
     // Map trade flows to globe arcs — use disrupted flows when simulation is active
     const flows = simulationResult?.disrupted_trade_flows || analysis?.trade_flows || [];
@@ -127,6 +144,8 @@ const Index = () => {
                     onSimulate={handleSimulate}
                     onReset={handleResetScenario}
                     isSimulating={simulateMutation.isPending}
+                    onCustomScenario={handleCustomScenario}
+                    isCustomScenarioActive={isCustomStreaming}
                 />
             </div>
 
@@ -145,7 +164,7 @@ const Index = () => {
 
             {/* Right Panel: Agent Workflow */}
             <div className="col-span-3 row-span-6">
-                <AgentWorkflow steps={steps} isStreaming={isStreaming} />
+                <AgentWorkflow steps={isCustomStreaming ? customSteps : steps} isStreaming={isStreaming || isCustomStreaming} />
             </div>
 
             {/* Bottom: Risk Table */}

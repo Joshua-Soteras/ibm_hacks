@@ -2,6 +2,7 @@
 
 import json
 from typing import Optional
+from urllib.parse import quote
 
 import requests
 from ibm_watsonx_orchestrate.agent_builder.tools import tool
@@ -9,6 +10,7 @@ from ibm_watsonx_orchestrate.agent_builder.tools import tool
 import sys as _sys
 from pathlib import Path as _Path
 _sys.path.insert(0, str(_Path(__file__).resolve().parent))
+from _api import is_api_mode, api_get, BACKEND_CONNECTION
 from _db import get_db_conn
 
 EDGAR_SEARCH_URL = "https://efts.sec.gov/LATEST/search-index"
@@ -17,6 +19,12 @@ USER_AGENT = "MineralWatch/1.0 (supply-chain-research)"
 
 def _lookup_cik(company_name: str) -> Optional[int]:
     """Look up a company's CIK from the edgar_company_filings table."""
+    if is_api_mode():
+        try:
+            data = api_get(f"/api/edgar/cik/{quote(company_name, safe='')}")
+            return data.get("cik")
+        except Exception:
+            return None
     conn = get_db_conn()
     try:
         row = conn.execute(
@@ -28,7 +36,7 @@ def _lookup_cik(company_name: str) -> Optional[int]:
         conn.close()
 
 
-@tool()
+@tool(expected_credentials=[BACKEND_CONNECTION])
 def search_edgar_10k(
     company_name: str,
     mineral_keywords: Optional[str] = None,

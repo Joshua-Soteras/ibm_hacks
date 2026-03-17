@@ -86,6 +86,38 @@ def company_scenarios(company: str):
     return {"company": company, "scenarios": scenarios}
 
 
+# --- ADK TOOL CALLBACK ENDPOINTS ---
+
+@app.get("/api/mineral/trade/{mineral}")
+def mineral_trade_flows(mineral: str, year: int = None):
+    from analytics import get_mineral_trade_flows
+    return get_mineral_trade_flows(mineral, year)
+
+
+@app.get("/api/mineral/profile/{mineral}")
+def mineral_profile(mineral: str):
+    from analytics import get_mineral_profile_data
+    return get_mineral_profile_data(mineral)
+
+
+@app.get("/api/company/dependencies/{company}")
+def company_dependencies(company: str):
+    from analytics import get_company_dependencies
+    return get_company_dependencies(company)
+
+
+@app.get("/api/risk-summary")
+def risk_summary(company: str, mineral: str = None):
+    from analytics import get_risk_summary
+    return get_risk_summary(company, mineral)
+
+
+@app.get("/api/edgar/cik/{company}")
+def edgar_cik(company: str):
+    from analytics import lookup_edgar_cik
+    return lookup_edgar_cik(company)
+
+
 class SimulateRequest(BaseModel):
     company: str
     country: str
@@ -104,96 +136,113 @@ def simulate(req: SimulateRequest):
 
 # --- SSE STREAMING ENDPOINT ---
 
-@app.get("/api/analyze-stream/{company}")
-def analyze_stream(company: str):
-    def event_generator():
-        def emit(data: dict):
-            return f"data: {json.dumps(data)}\n\n"
+def _mock_analysis_generator(company: str):
+    """Local-only analysis stream (fallback when agent credentials are not configured)."""
+    def emit(data: dict):
+        return f"data: {json.dumps(data)}\n\n"
 
-        from analytics import get_db_conn, _get_trade_data_for_company, _get_corporate_data_for_company, _normalize_hhi
-        import pandas as pd
-        import numpy as np
+    from analytics import get_db_conn, _get_trade_data_for_company, _get_corporate_data_for_company
+    import pandas as pd
 
-        # Stage 1: Orchestrator planning
-        yield emit({"stage": "orchestrator_planning", "title": "Risk Orchestrator", "status": "active",
-                     "trace": f"> Planning analysis for {company}\n> Identifying mineral dependencies..."})
+    yield emit({"stage": "orchestrator_planning", "title": "Risk Orchestrator", "status": "active",
+                 "trace": f"> Planning analysis for {company}\n> Identifying mineral dependencies..."})
+    time.sleep(0.3)
+
+    try:
+        conn = get_db_conn()
+        query_filings = "SELECT * FROM edgar_filing_details WHERE Company LIKE ?"
+        company_filings = pd.read_sql_query(query_filings, conn, params=(f"%{company}%",))
+
+        if company_filings.empty:
+            yield emit({"stage": "complete", "result": None})
+            conn.close()
+            return
+
+        minerals = company_filings['Mineral'].unique().tolist()
+
+        yield emit({"stage": "orchestrator_planning", "title": "Risk Orchestrator", "status": "completed",
+                     "trace": f"> Found {len(minerals)} mineral dependencies\n> Dispatching sub-agents..."})
+        time.sleep(0.2)
+
+        yield emit({"stage": "trade_intel", "title": "Trade Intelligence Agent", "status": "active",
+                     "trace": f"> Querying trade flows for {len(minerals)} minerals\n> Computing HHI concentration indices..."})
         time.sleep(0.3)
 
-        try:
-            conn = get_db_conn()
-            query_filings = "SELECT * FROM edgar_filing_details WHERE Company LIKE ?"
-            company_filings = pd.read_sql_query(query_filings, conn, params=(f"%{company}%",))
+        trade_data = _get_trade_data_for_company(company, conn, minerals)
 
-            if company_filings.empty:
-                yield emit({"stage": "complete", "result": None})
-                conn.close()
-                return
+        yield emit({"stage": "trade_intel", "title": "Trade Intelligence Agent", "status": "completed",
+                     "trace": f"> Analyzed {len(trade_data['flows'])} trade routes\n> Computed {len(trade_data['hhis'])} HHI scores\n> Trade risk score: {round(trade_data['trade_score'])}"})
+        time.sleep(0.2)
 
-            minerals = company_filings['Mineral'].unique().tolist()
+        yield emit({"stage": "corporate_exposure", "title": "Corporate Exposure Agent", "status": "active",
+                     "trace": f"> Scanning USGS supply risk data\n> Cross-referencing SEC filings..."})
+        time.sleep(0.3)
 
-            yield emit({"stage": "orchestrator_planning", "title": "Risk Orchestrator", "status": "completed",
-                         "trace": f"> Found {len(minerals)} mineral dependencies\n> Dispatching sub-agents..."})
-            time.sleep(0.2)
+        corp_data = _get_corporate_data_for_company(conn, minerals)
 
-            # Stage 2: Trade Intel
-            yield emit({"stage": "trade_intel", "title": "Trade Intelligence Agent", "status": "active",
-                         "trace": f"> Querying trade flows for {len(minerals)} minerals\n> Computing HHI concentration indices..."})
-            time.sleep(0.3)
+        yield emit({"stage": "corporate_exposure", "title": "Corporate Exposure Agent", "status": "completed",
+                     "trace": f"> Corporate exposure score: {corp_data['corporate_score']}\n> Substitutability risk: {corp_data['subst_score']}"})
+        time.sleep(0.2)
 
-            trade_data = _get_trade_data_for_company(company, conn, minerals)
+        yield emit({"stage": "orchestrator_scoring", "title": "Risk Orchestrator — Scoring", "status": "active",
+                     "trace": "> Computing weighted composite score\n> Weights: trade 40%, corporate 35%, substitutability 25%"})
+        time.sleep(0.2)
 
-            yield emit({"stage": "trade_intel", "title": "Trade Intelligence Agent", "status": "completed",
-                         "trace": f"> Analyzed {len(trade_data['flows'])} trade routes\n> Computed {len(trade_data['hhis'])} HHI scores\n> Trade risk score: {round(trade_data['trade_score'])}"})
-            time.sleep(0.2)
+        trade_score = trade_data["trade_score"]
+        corporate_score = corp_data["corporate_score"]
+        subst_score = corp_data["subst_score"]
+        composite_score = round(trade_score * 0.40 + corporate_score * 0.35 + subst_score * 0.25)
 
-            # Stage 3: Corporate Exposure
-            yield emit({"stage": "corporate_exposure", "title": "Corporate Exposure Agent", "status": "active",
-                         "trace": f"> Scanning USGS supply risk data\n> Cross-referencing SEC filings..."})
-            time.sleep(0.3)
+        summary = company_filings['Snippet'].iloc[0] if 'Snippet' in company_filings.columns else "No specific filing snippets found."
 
-            corp_data = _get_corporate_data_for_company(conn, minerals)
+        result = {
+            "company": company,
+            "score": composite_score,
+            "breakdown": {
+                "trade": round(trade_score),
+                "corporate": round(corporate_score),
+                "substitutability": round(subst_score)
+            },
+            "minerals": minerals,
+            "trade_flows": trade_data["flows"],
+            "summary": summary
+        }
 
-            yield emit({"stage": "corporate_exposure", "title": "Corporate Exposure Agent", "status": "completed",
-                         "trace": f"> Corporate exposure score: {corp_data['corporate_score']}\n> Substitutability risk: {corp_data['subst_score']}"})
-            time.sleep(0.2)
+        yield emit({"stage": "orchestrator_scoring", "title": "Risk Orchestrator — Scoring", "status": "completed",
+                     "trace": f"> Composite risk score: {composite_score}\n> Analysis complete for {company}"})
+        time.sleep(0.1)
 
-            # Stage 4: Orchestrator scoring
-            yield emit({"stage": "orchestrator_scoring", "title": "Risk Orchestrator — Scoring", "status": "active",
-                         "trace": "> Computing weighted composite score\n> Weights: trade 40%, corporate 35%, substitutability 25%"})
-            time.sleep(0.2)
+        yield emit({"stage": "complete", "result": result})
+        conn.close()
 
-            trade_score = trade_data["trade_score"]
-            corporate_score = corp_data["corporate_score"]
-            subst_score = corp_data["subst_score"]
-            composite_score = round(trade_score * 0.40 + corporate_score * 0.35 + subst_score * 0.25)
+    except Exception as e:
+        yield emit({"stage": "error", "error": str(e)})
 
-            summary = company_filings['Snippet'].iloc[0] if 'Snippet' in company_filings.columns else "No specific filing snippets found."
 
-            result = {
-                "company": company,
-                "score": composite_score,
-                "breakdown": {
-                    "trade": round(trade_score),
-                    "corporate": round(corporate_score),
-                    "substitutability": round(subst_score)
-                },
-                "minerals": minerals,
-                "trade_flows": trade_data["flows"],
-                "summary": summary
-            }
+@app.get("/api/analyze-stream/{company}")
+def analyze_stream(company: str):
+    if os.getenv("ORCHESTRATE_URL") and os.getenv("IBM_API_KEY"):
+        from agent_client import run_analysis_agent_generator
+        return StreamingResponse(
+            run_analysis_agent_generator(company),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+    return StreamingResponse(
+        _mock_analysis_generator(company),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
-            yield emit({"stage": "orchestrator_scoring", "title": "Risk Orchestrator — Scoring", "status": "completed",
-                         "trace": f"> Composite risk score: {composite_score}\n> Analysis complete for {company}"})
-            time.sleep(0.1)
 
-            yield emit({"stage": "complete", "result": result})
-            conn.close()
-
-        except Exception as e:
-            yield emit({"stage": "error", "error": str(e)})
-
-    return StreamingResponse(event_generator(), media_type="text/event-stream",
-                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+@app.get("/api/custom-scenario-stream/{company}")
+def custom_scenario_stream(company: str, scenario: str):
+    from agent_client import run_custom_scenario_generator
+    return StreamingResponse(
+        run_custom_scenario_generator(company, scenario),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
+    )
 
 
 if __name__ == "__main__":

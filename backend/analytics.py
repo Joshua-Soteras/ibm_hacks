@@ -1,4 +1,5 @@
 import math
+import re
 
 import pandas as pd
 import sqlite3
@@ -33,6 +34,15 @@ def get_company_list():
     return sorted(clean_companies)
 
 RISK_SCORE_MAP = {'LOW': 20, 'MODERATE': 50, 'HIGH': 70, 'CRITICAL': 90}
+
+USGS_COL = 'USGS Commodity Name\n(exact CSV name)'
+
+
+def strip_mineral_qualifier(name: str) -> str:
+    """Strip parenthetical qualifiers and trailing asterisks from mineral names."""
+    name = re.sub(r"\s*\(.*?\)", "", name)
+    name = name.strip("* ").strip()
+    return name
 
 
 def _normalize_hhi(hhi: float) -> float:
@@ -320,19 +330,19 @@ def get_company_minerals(company_name):
 def get_mineral_risk(mineral_name):
     """Get trade concentration and supply risk for a single mineral."""
     conn = get_db_conn()
-    
+
     # Trade concentration
     query_trade = "SELECT * FROM trade_data WHERE Mineral LIKE ?"
     df_trade = pd.read_sql_query(query_trade, conn, params=(f"%{mineral_name}%",))
-    
+
     hhi = compute_hhi(df_trade)
-    
+
     # Supply risk from USGS
     query_usgs = "SELECT \"Supply Risk\" FROM usgs_minerals WHERE \"USGS Commodity Name\\n(exact CSV name)\" LIKE ?"
     df_usgs = pd.read_sql_query(query_usgs, conn, params=(f"%{mineral_name}%",))
-    
+
     supply_risk = df_usgs['Supply Risk'].iloc[0] if not df_usgs.empty else "UNKNOWN"
-    
+
     conn.close()
     return {
         "mineral": mineral_name,
@@ -340,3 +350,422 @@ def get_mineral_risk(mineral_name):
         "concentration_score": round(_normalize_hhi(hhi * 10000), 1),
         "supply_risk": supply_risk
     }
+
+
+# --- ADK TOOL CALLBACK FUNCTIONS ---
+
+def get_mineral_trade_flows(mineral_name, year=None):
+    """Get import volumes for a mineral grouped by source country."""
+    conn = get_db_conn()
+    try:
+        cursor = conn.cursor()
+        if year is not None:
+            cursor.execute(
+                'SELECT Country, SUM("Customs Value (USD)") as total_value '
+                'FROM trade_data WHERE Mineral LIKE ? AND Year = ? '
+                'GROUP BY Country ORDER BY total_value DESC',
+                (f"%{mineral_name}%", year),
+            )
+        else:
+            cursor.execute(
+                'SELECT Country, SUM("Customs Value (USD)") as total_value '
+                'FROM trade_data WHERE Mineral LIKE ? '
+                'GROUP BY Country ORDER BY total_value DESC',
+                (f"%{mineral_name}%",),
+            )
+        rows = cursor.fetchall()
+        if not rows:
+            return {
+                "mineral": mineral_name.lower(),
+                "year": year,
+                "trade_flows": [],
+                "note": "No trade data found for this mineral.",
+            }
+        total = sum(r[1] for r in rows)
+        trade_flows = []
+        for r in rows:
+            val = r[1]
+            trade_flows.append({
+                "country": r[0],
+                "total_value_usd": val,
+                "share_pct": round(val / total * 100, 2) if total > 0 else 0.0,
+            })
+        return {
+            "mineral": mineral_name.lower(),
+            "year": year,
+            "trade_flows": trade_flows,
+        }
+    finally:
+        conn.close()
+
+
+def get_mineral_profile_data(mineral_name):
+    """Get a structured mineral profile from USGS, EDGAR summary, and blind-spot data."""
+    conn = get_db_conn()
+    try:
+        cursor = conn.cursor()
+
+        COL_MATERIAL = "Material / Compound\nUsed in Fab"
+        COL_FUNCTION = "What It Does in the Chip"
+        COL_CRITICAL = "Critical Mineral?\n(2025 List)"
+        COL_PRODUCER = "Top Producer\n(Country)"
+        COL_HTS = "HTS Code\n(USITC DataWeb)"
+
+        cursor.execute(
+            f'SELECT * FROM usgs_minerals WHERE "{USGS_COL}" LIKE ?',
+            (f"%{mineral_name}%",),
+        )
+        rows = cursor.fetchall()
+        if not rows:
+            return {"error": f"Mineral '{mineral_name}' not found in USGS data."}
+
+        cols = [desc[0] for desc in cursor.description]
+        usgs_data = dict(zip(cols, rows[0]))
+
+        profile = {
+            "mineral": mineral_name.lower(),
+            "fab_stage": usgs_data.get("Fab Stage", ""),
+            "material_compound": usgs_data.get(COL_MATERIAL, ""),
+            "chip_function": usgs_data.get(COL_FUNCTION, ""),
+            "critical_mineral": usgs_data.get(COL_CRITICAL, ""),
+            "top_producer": usgs_data.get(COL_PRODUCER, ""),
+            "supply_risk": usgs_data.get("Supply Risk", ""),
+            "hts_code": usgs_data.get(COL_HTS, ""),
+        }
+
+        if len(rows) > 1:
+            profile["additional_uses"] = []
+            for r in rows[1:]:
+                d = dict(zip(cols, r))
+                profile["additional_uses"].append({
+                    "fab_stage": d.get("Fab Stage", ""),
+                    "material_compound": d.get(COL_MATERIAL, ""),
+                    "chip_function": d.get(COL_FUNCTION, ""),
+                })
+
+        cursor.execute(
+            'SELECT * FROM edgar_summary WHERE Mineral LIKE ?',
+            (f"%{mineral_name}%",),
+        )
+        edgar_row = cursor.fetchone()
+        if edgar_row:
+            edgar_cols = [desc[0] for desc in cursor.description]
+            edgar_data = dict(zip(edgar_cols, edgar_row))
+            profile["edgar_hits"] = edgar_data.get("EDGAR Hits", 0)
+            profile["unique_companies"] = edgar_data.get("Unique\nCompanies", 0)
+            profile["edgar_risk_alignment"] = edgar_data.get("EDGAR vs Risk\nAlignment", "")
+
+        cursor.execute(
+            'SELECT * FROM edgar_blind_spot_analysis WHERE Mineral LIKE ?',
+            (f"%{mineral_name}%",),
+        )
+        blind_row = cursor.fetchone()
+        if blind_row:
+            blind_cols = [desc[0] for desc in cursor.description]
+            blind_data = dict(zip(blind_cols, blind_row))
+            profile["blind_spot_assessment"] = blind_data.get("Assessment", "")
+            profile["recommended_action"] = blind_data.get("Action", "")
+
+        return profile
+    finally:
+        conn.close()
+
+
+SUPPLY_RISK_SEVERITY = {
+    "CRITICAL": "critical",
+    "HIGH": "high",
+    "MODERATE": "moderate",
+    "LOW": "low",
+}
+
+
+def get_company_dependencies(company_name):
+    """Extract mineral dependencies for a company from EDGAR data."""
+    conn = get_db_conn()
+    try:
+        cursor = conn.cursor()
+
+        cursor.execute(
+            'SELECT * FROM edgar_mineral_company_matrix WHERE "Company / Mineral" LIKE ?',
+            (f"%{company_name}%",),
+        )
+        matrix_row = cursor.fetchone()
+
+        if not matrix_row:
+            # Fallback: build from edgar_filing_details
+            cursor.execute(
+                'SELECT Mineral, COUNT(*) as mentions '
+                'FROM edgar_filing_details WHERE Company LIKE ? GROUP BY Mineral',
+                (f"%{company_name}%",),
+            )
+            filing_minerals = cursor.fetchall()
+            if not filing_minerals:
+                return {
+                    "company": company_name,
+                    "minerals_found": [],
+                    "dependencies": [],
+                    "note": "Company not found in EDGAR data.",
+                }
+
+            minerals_found = [r[0] for r in filing_minerals]
+            dependencies = []
+            for row in filing_minerals:
+                mineral = row[0]
+                cursor.execute(
+                    'SELECT Snippet FROM edgar_filing_details '
+                    'WHERE Company LIKE ? AND Mineral LIKE ? LIMIT 3',
+                    (f"%{company_name}%", f"%{mineral}%"),
+                )
+                snippets = [r[0] for r in cursor.fetchall() if r[0]]
+                context = "; ".join(snippets) if snippets else "Mentioned in EDGAR filings."
+
+                base_name = strip_mineral_qualifier(mineral)
+                cursor.execute(
+                    f'SELECT "Supply Risk" FROM usgs_minerals WHERE "{USGS_COL}" LIKE ?',
+                    (f"%{base_name}%",),
+                )
+                risk_row = cursor.fetchone()
+                risk_level = risk_row[0] if risk_row else "UNKNOWN"
+                severity = SUPPLY_RISK_SEVERITY.get(
+                    risk_level.upper() if isinstance(risk_level, str) else "", "unknown"
+                )
+                dependencies.append({
+                    "mineral": mineral,
+                    "context": context[:500],
+                    "severity": severity,
+                })
+
+            severity_order = {"critical": 0, "high": 1, "moderate": 2, "low": 3, "unknown": 4}
+            dependencies.sort(key=lambda d: severity_order.get(d["severity"], 4))
+            return {
+                "company": company_name,
+                "minerals_found": minerals_found,
+                "dependencies": dependencies,
+                "source": "edgar_filing_details",
+            }
+
+        cols = [desc[0] for desc in cursor.description]
+        matrix_data = dict(zip(cols, matrix_row))
+
+        minerals_found = []
+        for col, val in matrix_data.items():
+            if col == "Company / Mineral":
+                continue
+            if val and val != 0 and val != "0":
+                minerals_found.append(col)
+
+        dependencies = []
+        for mineral in minerals_found:
+            cursor.execute(
+                'SELECT Snippet FROM edgar_filing_details '
+                'WHERE Company LIKE ? AND Mineral LIKE ? LIMIT 3',
+                (f"%{company_name}%", f"%{mineral}%"),
+            )
+            snippets = [r[0] for r in cursor.fetchall() if r[0]]
+            context = "; ".join(snippets) if snippets else "Mentioned in EDGAR filings."
+
+            base_name = strip_mineral_qualifier(mineral)
+            cursor.execute(
+                f'SELECT "Supply Risk" FROM usgs_minerals WHERE "{USGS_COL}" LIKE ?',
+                (f"%{base_name}%",),
+            )
+            risk_row = cursor.fetchone()
+            risk_level = risk_row[0] if risk_row else "UNKNOWN"
+            severity = SUPPLY_RISK_SEVERITY.get(
+                risk_level.upper() if isinstance(risk_level, str) else "", "unknown"
+            )
+            dependencies.append({
+                "mineral": mineral,
+                "context": context[:500],
+                "severity": severity,
+            })
+
+        severity_order = {"critical": 0, "high": 1, "moderate": 2, "low": 3, "unknown": 4}
+        dependencies.sort(key=lambda d: severity_order.get(d["severity"], 4))
+        return {
+            "company": company_name,
+            "minerals_found": minerals_found,
+            "dependencies": dependencies,
+        }
+    finally:
+        conn.close()
+
+
+def get_risk_summary(company_name, mineral_name=None):
+    """Summarize mineral supply-chain risk using EDGAR data."""
+    conn = get_db_conn()
+    try:
+        cursor = conn.cursor()
+
+        # Mineral-centric mode
+        if mineral_name:
+            base_name = strip_mineral_qualifier(mineral_name)
+            cursor.execute(
+                'SELECT COUNT(DISTINCT Company) as company_count, COUNT(*) as total_hits '
+                'FROM edgar_filing_details WHERE Mineral LIKE ?',
+                (f"%{base_name}%",),
+            )
+            row = cursor.fetchone()
+            company_count = row[0] if row else 0
+            total_hits = row[1] if row else 0
+
+            if company_count == 0:
+                return {
+                    "mineral": mineral_name,
+                    "risk_summary": f"No EDGAR filing data found for mineral {mineral_name}.",
+                    "exposure_score": 0,
+                    "key_risks": [],
+                    "mode": "mineral_centric",
+                }
+
+            cursor.execute(
+                f'SELECT "Supply Risk" FROM usgs_minerals WHERE "{USGS_COL}" LIKE ?',
+                (f"%{base_name}%",),
+            )
+            usgs_row = cursor.fetchone()
+            supply_risk = usgs_row[0].upper() if usgs_row and usgs_row[0] else "UNKNOWN"
+            supply_risk_score = RISK_SCORE_MAP.get(supply_risk, 50)
+
+            log_breadth = math.log(company_count + 1) / math.log(1020 + 1)
+            mention_intensity = min((total_hits / company_count) / 5.0, 1.0) if company_count > 0 else 0
+
+            mineral_corporate_score = round(
+                supply_risk_score * 0.50
+                + log_breadth * 100 * 0.30
+                + mention_intensity * 100 * 0.20
+            )
+            mineral_corporate_score = min(mineral_corporate_score, 100)
+
+            cursor.execute(
+                'SELECT Company, COUNT(*) as hits FROM edgar_filing_details '
+                'WHERE Mineral LIKE ? GROUP BY Company ORDER BY hits DESC LIMIT 5',
+                (f"%{base_name}%",),
+            )
+            top_companies = cursor.fetchall()
+            key_risks = [
+                f"{r[0]}: {r[1]} mention(s) of {mineral_name}" for r in top_companies
+            ]
+
+            summary = (
+                f"{mineral_name} ({supply_risk} supply risk) is mentioned by "
+                f"{company_count} companies across {total_hits} filings. "
+                f"Mineral-centric corporate exposure score: {mineral_corporate_score}/100."
+            )
+
+            return {
+                "mineral": mineral_name,
+                "risk_summary": summary,
+                "exposure_score": mineral_corporate_score,
+                "key_risks": key_risks,
+                "company_count": company_count,
+                "total_hits": total_hits,
+                "supply_risk": supply_risk,
+                "mode": "mineral_centric",
+            }
+
+        # Company-centric mode
+        cursor.execute(
+            'SELECT DISTINCT Mineral FROM edgar_filing_details WHERE Company LIKE ?',
+            (f"%{company_name}%",),
+        )
+        minerals = [r[0] for r in cursor.fetchall()]
+
+        if not minerals:
+            return {
+                "company": company_name,
+                "risk_summary": "No EDGAR filing data found for this company.",
+                "exposure_score": 0,
+                "key_risks": [],
+            }
+
+        key_risks = []
+        total_risk_score = 0
+        risk_count = 0
+
+        for mineral in minerals:
+            cursor.execute(
+                'SELECT * FROM edgar_blind_spot_analysis WHERE Mineral LIKE ?',
+                (f"%{mineral}%",),
+            )
+            blind_row = cursor.fetchone()
+
+            cursor.execute(
+                'SELECT * FROM edgar_summary WHERE Mineral LIKE ?',
+                (f"%{mineral}%",),
+            )
+            summary_row = cursor.fetchone()
+
+            risk_level = "UNKNOWN"
+            assessment = ""
+
+            if blind_row:
+                blind_cols = [desc[0] for desc in cursor.description]
+                # re-query for blind_spot columns
+                cursor.execute(
+                    'SELECT * FROM edgar_blind_spot_analysis WHERE Mineral LIKE ?',
+                    (f"%{mineral}%",),
+                )
+                blind_row = cursor.fetchone()
+                blind_cols = [desc[0] for desc in cursor.description]
+                blind_data = dict(zip(blind_cols, blind_row))
+                risk_level = blind_data.get("Supply Risk", "UNKNOWN") or "UNKNOWN"
+                assessment = blind_data.get("Assessment", "") or ""
+
+            score = RISK_SCORE_MAP.get(
+                risk_level.upper() if isinstance(risk_level, str) else "",
+                50,
+            )
+            total_risk_score += score
+            risk_count += 1
+
+            risk_desc = f"{mineral}: {risk_level} supply risk"
+            if summary_row:
+                # Re-query to get summary columns properly
+                cursor.execute(
+                    'SELECT * FROM edgar_summary WHERE Mineral LIKE ?',
+                    (f"%{mineral}%",),
+                )
+                summary_row = cursor.fetchone()
+                summary_cols = [desc[0] for desc in cursor.description]
+                summary_data = dict(zip(summary_cols, summary_row))
+                hits = summary_data.get("EDGAR Hits")
+                if hits:
+                    risk_desc += f" ({hits} EDGAR hits)"
+            if assessment:
+                risk_desc += f" — {assessment}"
+            key_risks.append(risk_desc)
+
+        exposure_score = round(total_risk_score / risk_count) if risk_count > 0 else 0
+
+        critical_minerals = [m for m, kr in zip(minerals, key_risks) if "CRITICAL" in kr.upper()]
+        high_minerals = [m for m, kr in zip(minerals, key_risks) if "HIGH" in kr.upper()]
+
+        summary_parts = [f"{company_name} has exposure to {len(minerals)} critical mineral(s)."]
+        if critical_minerals:
+            summary_parts.append(f"Critical risk: {', '.join(critical_minerals)}.")
+        if high_minerals:
+            summary_parts.append(f"High risk: {', '.join(high_minerals)}.")
+
+        return {
+            "company": company_name,
+            "risk_summary": " ".join(summary_parts),
+            "exposure_score": exposure_score,
+            "key_risks": key_risks,
+        }
+    finally:
+        conn.close()
+
+
+def lookup_edgar_cik(company_name):
+    """Look up a company's CIK from EDGAR data."""
+    conn = get_db_conn()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT CIK FROM edgar_company_filings WHERE Company LIKE ? LIMIT 1",
+            (f"%{company_name}%",),
+        )
+        row = cursor.fetchone()
+        return {"company": company_name, "cik": row[0] if row else None}
+    finally:
+        conn.close()

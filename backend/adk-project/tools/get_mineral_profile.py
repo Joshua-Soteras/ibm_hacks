@@ -1,34 +1,30 @@
 """Tool to retrieve a mineral profile from the mineralwatch database."""
 
 import json
+from urllib.parse import quote
 
 from ibm_watsonx_orchestrate.agent_builder.tools import tool
 
 import sys as _sys
 from pathlib import Path as _Path
 _sys.path.insert(0, str(_Path(__file__).resolve().parent))
+from _api import is_api_mode, api_get, BACKEND_CONNECTION
 from _db import get_db_conn, USGS_COL
 
 
-@tool()
-def get_mineral_profile(mineral_name: str) -> str:
-    """Retrieve a structured profile for a critical mineral from USGS data.
+def _via_api(mineral_name: str) -> str:
+    try:
+        data = api_get(f"/api/mineral/profile/{quote(mineral_name, safe='')}")
+        return json.dumps(data)
+    except Exception as e:
+        return json.dumps({"error": f"Backend API unavailable: {e}"})
 
-    Queries the mineralwatch database for USGS mineral data, EDGAR filing
-    summary, and blind-spot analysis to return a comprehensive mineral profile.
 
-    Args:
-        mineral_name: Name of the mineral (e.g. gallium, germanium, tungsten, cobalt, rare earths).
-
-    Returns:
-        JSON string with mineral profile including production, supply risk,
-        EDGAR coverage, and blind-spot assessment.
-    """
+def _via_db(mineral_name: str) -> str:
     conn = get_db_conn()
     try:
         cursor = conn.cursor()
 
-        # Query usgs_minerals (column name has a literal newline)
         cursor.execute(
             f'SELECT * FROM usgs_minerals WHERE "{USGS_COL}" LIKE ?',
             (f"%{mineral_name}%",),
@@ -38,12 +34,10 @@ def get_mineral_profile(mineral_name: str) -> str:
         if not rows:
             return json.dumps({"error": f"Mineral '{mineral_name}' not found in USGS data."})
 
-        # Build profile from first matching row
         row = rows[0]
         cols = [desc[0] for desc in cursor.description]
         usgs_data = dict(zip(cols, row))
 
-        # Exact column names (some contain literal newlines)
         COL_MATERIAL = "Material / Compound\nUsed in Fab"
         COL_FUNCTION = "What It Does in the Chip"
         COL_CRITICAL = "Critical Mineral?\n(2025 List)"
@@ -61,7 +55,6 @@ def get_mineral_profile(mineral_name: str) -> str:
             "hts_code": usgs_data.get(COL_HTS, ""),
         }
 
-        # Include all matching USGS entries if mineral appears in multiple fab stages
         if len(rows) > 1:
             profile["additional_uses"] = []
             for r in rows[1:]:
@@ -72,7 +65,6 @@ def get_mineral_profile(mineral_name: str) -> str:
                     "chip_function": d.get(COL_FUNCTION, ""),
                 })
 
-        # Enrich with EDGAR summary
         cursor.execute(
             'SELECT * FROM edgar_summary WHERE Mineral LIKE ?',
             (f"%{mineral_name}%",),
@@ -85,7 +77,6 @@ def get_mineral_profile(mineral_name: str) -> str:
             profile["unique_companies"] = edgar_data.get("Unique\nCompanies", 0)
             profile["edgar_risk_alignment"] = edgar_data.get("EDGAR vs Risk\nAlignment", "")
 
-        # Enrich with blind-spot analysis
         cursor.execute(
             'SELECT * FROM edgar_blind_spot_analysis WHERE Mineral LIKE ?',
             (f"%{mineral_name}%",),
@@ -100,3 +91,22 @@ def get_mineral_profile(mineral_name: str) -> str:
         return json.dumps(profile)
     finally:
         conn.close()
+
+
+@tool(expected_credentials=[BACKEND_CONNECTION])
+def get_mineral_profile(mineral_name: str) -> str:
+    """Retrieve a structured profile for a critical mineral from USGS data.
+
+    Queries the mineralwatch database for USGS mineral data, EDGAR filing
+    summary, and blind-spot analysis to return a comprehensive mineral profile.
+
+    Args:
+        mineral_name: Name of the mineral (e.g. gallium, germanium, tungsten, cobalt, rare earths).
+
+    Returns:
+        JSON string with mineral profile including production, supply risk,
+        EDGAR coverage, and blind-spot assessment.
+    """
+    if is_api_mode():
+        return _via_api(mineral_name)
+    return _via_db(mineral_name)
