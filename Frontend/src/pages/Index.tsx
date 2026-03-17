@@ -1,6 +1,8 @@
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { fetchCompanies, fetchAnalyze } from "@/lib/api";
+import { useQuery, useMutation } from "@tanstack/react-query";
+import { fetchCompanies, fetchCompanyScenarios, simulateDisruption } from "@/lib/api";
+import type { ScenarioCard, SimulationResult } from "@/lib/api";
+import { useAnalysisStream } from "@/hooks/useAnalysisStream";
 import MetricsPanel from "@/components/dashboard/MetricsPanel";
 import ScenariosPanel from "@/components/dashboard/ScenariosPanel";
 import GlobeView from "@/components/dashboard/GlobeView";
@@ -13,28 +15,75 @@ const countryCoords: Record<string, number[]> = countryCoordsData;
 
 const Index = () => {
     const [selectedCompany, setSelectedCompany] = useState<string | null>(null);
+    const [activeScenario, setActiveScenario] = useState<ScenarioCard | null>(null);
+    const [simulationResult, setSimulationResult] = useState<SimulationResult | null>(null);
+
+    const { steps, isStreaming, analysisResult, startStream } = useAnalysisStream();
+    const analysis = analysisResult;
+    const isAnalyzing = isStreaming;
 
     const { data: companies = [] } = useQuery({
         queryKey: ['companies'],
         queryFn: fetchCompanies
     });
 
-    const { data: analysis, isLoading: isAnalyzing } = useQuery({
-        queryKey: ['analyze', selectedCompany],
-        queryFn: () => fetchAnalyze(selectedCompany!),
-        enabled: !!selectedCompany,
+    const { data: scenarios = [], isLoading: scenariosLoading } = useQuery({
+        queryKey: ['scenarios', selectedCompany],
+        queryFn: () => fetchCompanyScenarios(selectedCompany!),
+        enabled: !!selectedCompany && !!analysis,
     });
 
-    // Map trade flows to globe arcs
-    const arcs = (analysis?.trade_flows || []).map((f: any) => {
+    const simulateMutation = useMutation({
+        mutationFn: (scenario: ScenarioCard) =>
+            simulateDisruption(selectedCompany!, scenario.country, scenario.mineral),
+        onSuccess: (result) => setSimulationResult(result),
+    });
+
+    const handleCompanySelect = (company: string) => {
+        setSelectedCompany(company);
+        setActiveScenario(null);
+        setSimulationResult(null);
+        startStream(company);
+    };
+
+    const handleSimulate = (scenario: ScenarioCard) => {
+        setActiveScenario(scenario);
+        simulateMutation.mutate(scenario);
+    };
+
+    const handleResetScenario = () => {
+        setActiveScenario(null);
+        setSimulationResult(null);
+    };
+
+    // Map trade flows to globe arcs — use disrupted flows when simulation is active
+    const flows = simulationResult?.disrupted_trade_flows || analysis?.trade_flows || [];
+    const arcs = flows.map((f: any) => {
         const start = countryCoords[f.country] || [0, 0];
         const end = [37.09, -95.71]; // USA
+
+        let color = f.risk === 'high' ? '#ef4444' : f.risk === 'elevated' ? '#f59e0b' : '#22c55e';
+        let stroke = 0.8;
+        let status = f.status || 'active';
+
+        if (simulationResult) {
+            if (status === 'disrupted') {
+                color = '#ef444466'; // ghost red
+                stroke = 0.3;
+            } else if (status === 'stressed') {
+                color = '#f59e0b';
+                stroke = 1.5;
+            }
+        }
+
         return {
             startLat: start[0],
             startLng: start[1],
             endLat: end[0],
             endLng: end[1],
-            color: f.risk === 'high' ? '#ef4444' : f.risk === 'elevated' ? '#f59e0b' : '#22c55e',
+            color,
+            stroke,
+            status,
             label: `${f.mineral}: ${f.country} → USA (${f.share}%)`,
             riskLevel: f.risk
         };
@@ -45,10 +94,10 @@ const Index = () => {
             {/* Left Panel: Selector + Metrics + Scenarios */}
             <div className="col-span-3 row-span-6 flex flex-col gap-4 overflow-y-auto pr-1">
                 <div className="card-surface p-4">
-                    <CompanySelector 
-                        companies={companies} 
-                        onSelect={setSelectedCompany} 
-                        selectedCompany={selectedCompany} 
+                    <CompanySelector
+                        companies={companies}
+                        onSelect={handleCompanySelect}
+                        selectedCompany={selectedCompany}
                     />
                 </div>
 
@@ -70,8 +119,15 @@ const Index = () => {
                     </div>
                 )}
 
-                <MetricsPanel analysis={analysis} isLoading={isAnalyzing} />
-                <ScenariosPanel scenarios={analysis?.scenarios || []} />
+                <MetricsPanel analysis={analysis} isLoading={isAnalyzing} simulationResult={simulationResult} />
+                <ScenariosPanel
+                    scenarios={scenarios}
+                    isLoading={scenariosLoading}
+                    activeScenarioId={activeScenario?.id ?? null}
+                    onSimulate={handleSimulate}
+                    onReset={handleResetScenario}
+                    isSimulating={simulateMutation.isPending}
+                />
             </div>
 
             {/* Center: Globe */}
@@ -89,7 +145,7 @@ const Index = () => {
 
             {/* Right Panel: Agent Workflow */}
             <div className="col-span-3 row-span-6">
-                <AgentWorkflow isAnalyzing={isAnalyzing} selectedCompany={selectedCompany} />
+                <AgentWorkflow steps={steps} isStreaming={isStreaming} />
             </div>
 
             {/* Bottom: Risk Table */}

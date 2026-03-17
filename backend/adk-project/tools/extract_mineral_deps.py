@@ -4,7 +4,10 @@ import json
 
 from ibm_watsonx_orchestrate.agent_builder.tools import tool
 
-from ._db import get_db_conn, USGS_COL, strip_mineral_qualifier
+import sys as _sys
+from pathlib import Path as _Path
+_sys.path.insert(0, str(_Path(__file__).resolve().parent))
+from _db import get_db_conn, USGS_COL, strip_mineral_qualifier
 
 SUPPLY_RISK_SEVERITY = {
     "CRITICAL": "critical",
@@ -41,11 +44,62 @@ def extract_mineral_dependencies(company_name: str) -> str:
         matrix_row = cursor.fetchone()
 
         if not matrix_row:
+            # Fallback: build dependencies from edgar_filing_details (covers ~1,020 companies)
+            cursor.execute(
+                'SELECT Mineral, COUNT(*) as mentions '
+                'FROM edgar_filing_details WHERE Company LIKE ? GROUP BY Mineral',
+                (f"%{company_name}%",),
+            )
+            filing_minerals = cursor.fetchall()
+            if not filing_minerals:
+                return json.dumps({
+                    "company": company_name,
+                    "minerals_found": [],
+                    "dependencies": [],
+                    "note": "Company not found in EDGAR data.",
+                })
+
+            minerals_found = [r["Mineral"] for r in filing_minerals]
+            dependencies = []
+
+            for row in filing_minerals:
+                mineral = row["Mineral"]
+
+                # Get filing snippets
+                cursor.execute(
+                    'SELECT Snippet FROM edgar_filing_details '
+                    'WHERE Company LIKE ? AND Mineral LIKE ? LIMIT 3',
+                    (f"%{company_name}%", f"%{mineral}%"),
+                )
+                snippets = [r["Snippet"] for r in cursor.fetchall() if r["Snippet"]]
+                context = "; ".join(snippets) if snippets else "Mentioned in EDGAR filings."
+
+                # USGS severity lookup
+                base_name = strip_mineral_qualifier(mineral)
+                cursor.execute(
+                    f'SELECT "Supply Risk" FROM usgs_minerals WHERE "{USGS_COL}" LIKE ?',
+                    (f"%{base_name}%",),
+                )
+                risk_row = cursor.fetchone()
+                risk_level = risk_row["Supply Risk"] if risk_row else "UNKNOWN"
+                severity = SUPPLY_RISK_SEVERITY.get(
+                    risk_level.upper() if isinstance(risk_level, str) else "", "unknown"
+                )
+
+                dependencies.append({
+                    "mineral": mineral,
+                    "context": context[:500],
+                    "severity": severity,
+                })
+
+            severity_order = {"critical": 0, "high": 1, "moderate": 2, "low": 3, "unknown": 4}
+            dependencies.sort(key=lambda d: severity_order.get(d["severity"], 4))
+
             return json.dumps({
                 "company": company_name,
-                "minerals_found": [],
-                "dependencies": [],
-                "note": "Company not found in EDGAR mineral matrix.",
+                "minerals_found": minerals_found,
+                "dependencies": dependencies,
+                "source": "edgar_filing_details",
             })
 
         matrix_cols = [desc[0] for desc in cursor.description]

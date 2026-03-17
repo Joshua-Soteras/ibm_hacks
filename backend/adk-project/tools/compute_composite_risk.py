@@ -5,7 +5,10 @@ from typing import Optional
 
 from ibm_watsonx_orchestrate.agent_builder.tools import tool
 
-from ._db import get_db_conn, USGS_COL, DEFAULT_RISK_SCORE, strip_mineral_qualifier
+import sys as _sys
+from pathlib import Path as _Path
+_sys.path.insert(0, str(_Path(__file__).resolve().parent))
+from _db import get_db_conn, USGS_COL, DEFAULT_RISK_SCORE, strip_mineral_qualifier
 
 WEIGHT_TRADE = 0.40
 WEIGHT_CORPORATE = 0.35
@@ -17,6 +20,18 @@ RISK_TO_SCORE = {
     "MODERATE": 50,
     "LOW": 20,
 }
+
+
+def _normalize_hhi(hhi: float) -> float:
+    """Map HHI (0-10000) to risk score (0-100) using DOJ/FTC antitrust thresholds."""
+    if hhi <= 1500:
+        return (hhi / 1500) * 30
+    elif hhi <= 2500:
+        return 30 + ((hhi - 1500) / 1000) * 30
+    elif hhi <= 5000:
+        return 60 + ((hhi - 2500) / 2500) * 25
+    else:
+        return 85 + min((hhi - 5000) / 5000, 1.0) * 15
 
 
 @tool()
@@ -47,7 +62,7 @@ def compute_composite_risk(
     corporate_data = json.loads(corporate_data_json)
 
     hhi = trade_data.get("hhi", 0)
-    trade_risk = min(hhi / 100, 100)
+    trade_risk = _normalize_hhi(hhi)
 
     corporate_risk = corporate_data.get("exposure_score", 0)
 

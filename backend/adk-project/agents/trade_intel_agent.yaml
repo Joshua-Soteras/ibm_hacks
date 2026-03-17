@@ -5,7 +5,7 @@ description: >
   Analyzes trade data from the mineralwatch database to determine where the U.S.
   sources critical minerals, computes supply concentration indices, and retrieves
   mineral profiles enriched with USGS and EDGAR data.
-llm: watsonx/ibm/granite-3-8b-instruct
+llm: groq/openai/gpt-oss-120b
 style: react
 instructions: >
   You are a trade intelligence analyst specializing in critical mineral supply chains.

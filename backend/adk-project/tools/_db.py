@@ -1,10 +1,16 @@
 """Shared database connection helper for ADK tools."""
 
+import os
 import re
 import sqlite3
 from pathlib import Path
 
-DB_PATH = Path(__file__).resolve().parent.parent.parent.parent / "data" / "mineralwatch.db"
+_bundled = Path(__file__).resolve().parent / "mineralwatch.db"
+_dev = Path(__file__).resolve().parent.parent.parent.parent / "data" / "mineralwatch.db"
+DB_PATH = Path(os.environ.get(
+    "MINERALWATCH_DB_PATH",
+    str(_bundled if _bundled.exists() else _dev),
+))
 
 USGS_COL = 'USGS Commodity Name\n(exact CSV name)'
 

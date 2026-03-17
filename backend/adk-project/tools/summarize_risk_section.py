@@ -1,10 +1,15 @@
 """Tool to summarize mineral-related risk from EDGAR data."""
 
 import json
+import math
+from typing import Optional
 
 from ibm_watsonx_orchestrate.agent_builder.tools import tool
 
-from ._db import get_db_conn, DEFAULT_RISK_SCORE
+import sys as _sys
+from pathlib import Path as _Path
+_sys.path.insert(0, str(_Path(__file__).resolve().parent))
+from _db import get_db_conn, USGS_COL, DEFAULT_RISK_SCORE, strip_mineral_qualifier
 
 RISK_SCORE_MAP = {
     "CRITICAL": 90,
@@ -14,25 +19,107 @@ RISK_SCORE_MAP = {
 }
 
 
-@tool()
-def summarize_risk_section(company_name: str) -> str:
-    """Summarize mineral supply-chain risk for a company using EDGAR data.
+def _mineral_centric_risk(cursor, mineral_name: str) -> dict:
+    """Compute mineral-centric corporate risk across all companies."""
+    base_name = strip_mineral_qualifier(mineral_name)
 
-    Queries blind-spot analysis, EDGAR summary, and filing details to produce
-    a risk summary with an exposure score.
+    # Count companies and total mentions for this mineral
+    cursor.execute(
+        'SELECT COUNT(DISTINCT Company) as company_count, COUNT(*) as total_hits '
+        'FROM edgar_filing_details WHERE Mineral LIKE ?',
+        (f"%{base_name}%",),
+    )
+    row = cursor.fetchone()
+    company_count = row["company_count"] if row else 0
+    total_hits = row["total_hits"] if row else 0
+
+    if company_count == 0:
+        return {
+            "mineral": mineral_name,
+            "risk_summary": f"No EDGAR filing data found for mineral {mineral_name}.",
+            "exposure_score": 0,
+            "key_risks": [],
+            "mode": "mineral_centric",
+        }
+
+    # USGS supply risk lookup
+    cursor.execute(
+        f'SELECT "Supply Risk" FROM usgs_minerals WHERE "{USGS_COL}" LIKE ?',
+        (f"%{base_name}%",),
+    )
+    usgs_row = cursor.fetchone()
+    supply_risk = usgs_row["Supply Risk"].upper() if usgs_row and usgs_row["Supply Risk"] else "UNKNOWN"
+    supply_risk_score = RISK_SCORE_MAP.get(supply_risk, DEFAULT_RISK_SCORE)
+
+    # Log-scaled breadth: how many of the ~1020 companies mention this mineral
+    log_breadth = math.log(company_count + 1) / math.log(1020 + 1)
+    # Mention intensity: average mentions per company, capped
+    mention_intensity = min((total_hits / company_count) / 5.0, 1.0) if company_count > 0 else 0
+
+    mineral_corporate_score = round(
+        supply_risk_score * 0.50
+        + log_breadth * 100 * 0.30
+        + mention_intensity * 100 * 0.20
+    )
+    mineral_corporate_score = min(mineral_corporate_score, 100)
+
+    # Build key risks from top companies mentioning this mineral
+    cursor.execute(
+        'SELECT Company, COUNT(*) as hits FROM edgar_filing_details '
+        'WHERE Mineral LIKE ? GROUP BY Company ORDER BY hits DESC LIMIT 5',
+        (f"%{base_name}%",),
+    )
+    top_companies = cursor.fetchall()
+    key_risks = [
+        f"{r['Company']}: {r['hits']} mention(s) of {mineral_name}" for r in top_companies
+    ]
+
+    summary = (
+        f"{mineral_name} ({supply_risk} supply risk) is mentioned by "
+        f"{company_count} companies across {total_hits} filings. "
+        f"Mineral-centric corporate exposure score: {mineral_corporate_score}/100."
+    )
+
+    return {
+        "mineral": mineral_name,
+        "risk_summary": summary,
+        "exposure_score": mineral_corporate_score,
+        "key_risks": key_risks,
+        "company_count": company_count,
+        "total_hits": total_hits,
+        "supply_risk": supply_risk,
+        "mode": "mineral_centric",
+    }
+
+
+@tool()
+def summarize_risk_section(company_name: str, mineral_name: Optional[str] = None) -> str:
+    """Summarize mineral supply-chain risk using EDGAR data.
+
+    Two modes:
+    - Company-centric (default): risk for a company across all its minerals.
+    - Mineral-centric (when mineral_name is provided): corporate exposure for a
+      specific mineral across all companies mentioning it.
 
     Args:
         company_name: Name of the company to summarize risk for.
+        mineral_name: Optional mineral name for mineral-centric scoring.
+            When provided, computes how broadly this mineral is exposed across
+            all companies in the EDGAR database.
 
     Returns:
-        JSON string with {company, risk_summary, exposure_score, key_risks} where
-        exposure_score is 0-100 and key_risks is an array of risk descriptions.
+        JSON string with {company|mineral, risk_summary, exposure_score, key_risks}
+        where exposure_score is 0-100.
     """
     conn = get_db_conn()
     try:
         cursor = conn.cursor()
 
-        # Get minerals this company is exposed to
+        # Mineral-centric mode
+        if mineral_name:
+            return json.dumps(_mineral_centric_risk(cursor, mineral_name))
+
+        # Company-centric mode (original behavior)
         cursor.execute(
             'SELECT DISTINCT Mineral FROM edgar_filing_details WHERE Company LIKE ?',
             (f"%{company_name}%",),
