@@ -6,15 +6,21 @@ import numpy as np
 DB_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "mineralwatch.db")
 
 def get_db_conn():
-    """Get a database connection."""
+    """Get a database connection and ensure it's valid."""
+    if not os.path.exists(DB_PATH):
+        raise FileNotFoundError(f"Database not found at {DB_PATH}")
     return sqlite3.connect(DB_PATH)
 
 def get_company_list():
     """Get list of unique companies from database."""
-    conn = get_db_conn()
-    query = "SELECT DISTINCT Company FROM edgar_filing_details"
-    companies = pd.read_sql_query(query, conn)['Company'].tolist()
-    conn.close()
+    try:
+        conn = get_db_conn()
+        query = "SELECT DISTINCT Company FROM edgar_filing_details"
+        companies = pd.read_sql_query(query, conn)['Company'].tolist()
+        conn.close()
+    except Exception as e:
+        print(f"Database error in get_company_list: {e}")
+        return []
     
     clean_companies = []
     for c in companies:
@@ -37,14 +43,18 @@ def compute_hhi(trade_data):
 
 def analyze_company(company_name):
     """Perform full risk analysis for a given company using SQL."""
-    conn = get_db_conn()
-    
-    # 1. Get findings for the company
-    query_filings = "SELECT * FROM edgar_filing_details WHERE Company LIKE ?"
-    company_filings = pd.read_sql_query(query_filings, conn, params=(f"%{company_name}%",))
-    
-    if company_filings.empty:
-        conn.close()
+    try:
+        conn = get_db_conn()
+        
+        # 1. Get findings for the company
+        query_filings = "SELECT * FROM edgar_filing_details WHERE Company LIKE ?"
+        company_filings = pd.read_sql_query(query_filings, conn, params=(f"%{company_name}%",))
+        
+        if company_filings.empty:
+            conn.close()
+            return None
+    except Exception as e:
+        print(f"Error analyzing company {company_name}: {e}")
         return None
     
     minerals = company_filings['Mineral'].unique().tolist()

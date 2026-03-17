@@ -3,5 +3,7 @@ uvicorn[standard]
 ibm-watsonx-orchestrate
 python-dotenv
 pandas
+numpy
+openpyxl
 requests
 pyyaml
