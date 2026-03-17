@@ -303,7 +303,8 @@ def simulate_company_disruption(company_name, country, mineral, disruption_pct=1
             for f in same_mineral:
                 f["share"] = round(f["share"] * scale, 1)
 
-    # Recompute HHI for the disrupted mineral
+    # Recompute HHI for the disrupted mineral and look up USGS risk for corporate uplift
+    mineral_risk_score = 50  # default if USGS lookup fails
     try:
         conn = get_db_conn()
         minerals = baseline["minerals"]
@@ -322,6 +323,18 @@ def simulate_company_disruption(company_name, country, mineral, disruption_pct=1
                     ] * (1 - disruption_pct / 100.0)
                 hhi = compute_hhi(mineral_trade)
                 mineral_hhis.append(hhi)
+
+        # Look up USGS Supply Risk for the disrupted mineral
+        base_name = strip_mineral_qualifier(mineral)
+        cursor = conn.cursor()
+        cursor.execute(
+            f'SELECT "Supply Risk" FROM usgs_minerals WHERE "{USGS_COL}" LIKE ?',
+            (f"%{base_name}%",),
+        )
+        risk_row = cursor.fetchone()
+        if risk_row and risk_row[0]:
+            mineral_risk_score = RISK_SCORE_MAP.get(str(risk_row[0]).upper(), 50)
+
         conn.close()
     except Exception:
         mineral_hhis = []
@@ -337,8 +350,9 @@ def simulate_company_disruption(company_name, country, mineral, disruption_pct=1
     gap_penalty = avg_gap * 0.6
     new_trade_score = min(round(new_trade_score + gap_penalty), 100)
 
-    # Uplift corporate score by 15 (capped at 100) per system design
-    new_corporate = min(baseline_corporate + 15, 100)
+    # Corporate uplift: scaled by supply gap and mineral criticality (USGS risk score)
+    corporate_uplift = supply_gap * (mineral_risk_score / 100.0)
+    new_corporate = min(round(baseline_corporate + corporate_uplift), 100)
 
     # Substitutability uplift: losing supply makes finding substitutes harder
     new_subst = min(round(baseline_subst + avg_gap * 0.5), 100)
@@ -419,11 +433,13 @@ def simulate_multi_disruption(company_name, country, minerals_to_disrupt=None, d
         else:
             disrupted_flows.append({**flow, "status": "active"})
 
-    # Recompute HHI for all minerals
+    # Recompute HHI for all minerals and look up USGS risk for corporate uplift
+    mineral_risk_scores = {}  # mineral -> USGS risk score
     try:
         conn = get_db_conn()
         mineral_hhis = []
         val_col = 'Customs Value (USD)'
+        cursor = conn.cursor()
         for m in all_minerals:
             query_trade = "SELECT * FROM trade_data WHERE Mineral LIKE ?"
             mineral_trade = pd.read_sql_query(query_trade, conn, params=(f"%{m}%",))
@@ -436,6 +452,20 @@ def simulate_multi_disruption(company_name, country, minerals_to_disrupt=None, d
                     ] * (1 - disruption_pct / 100.0)
                 hhi = compute_hhi(mineral_trade)
                 mineral_hhis.append(hhi)
+
+        # Look up USGS Supply Risk for each disrupted mineral
+        for m in minerals_to_disrupt:
+            base_name = strip_mineral_qualifier(m)
+            cursor.execute(
+                f'SELECT "Supply Risk" FROM usgs_minerals WHERE "{USGS_COL}" LIKE ?',
+                (f"%{base_name}%",),
+            )
+            risk_row = cursor.fetchone()
+            if risk_row and risk_row[0]:
+                mineral_risk_scores[m] = RISK_SCORE_MAP.get(str(risk_row[0]).upper(), 50)
+            else:
+                mineral_risk_scores[m] = 50
+
         conn.close()
     except Exception:
         mineral_hhis = []
@@ -452,14 +482,17 @@ def simulate_multi_disruption(company_name, country, minerals_to_disrupt=None, d
     gap_penalty = avg_gap * 0.6
     new_trade_score = min(round(new_trade_score + gap_penalty), 100)
 
-    # Scale corporate uplift by number of disrupted minerals
-    num_disrupted = len(minerals_to_disrupt)
-    corporate_uplift = min(15 * num_disrupted, 100 - baseline_corporate)
-    new_corporate = min(baseline_corporate + corporate_uplift, 100)
+    # Corporate uplift: scaled by supply gap and mineral criticality (USGS risk score)
+    corporate_uplift = sum(
+        mineral_gaps.get(m, 0) * (mineral_risk_scores.get(m, 50) / 100.0)
+        for m in minerals_to_disrupt
+    )
+    new_corporate = min(round(baseline_corporate + corporate_uplift), 100)
 
     # Substitutability uplift: losing supply makes finding substitutes harder
     new_subst = min(round(baseline_subst + avg_gap * 0.5), 100)
 
+    num_disrupted = len(minerals_to_disrupt)
     disrupted_score = round(new_trade_score * 0.40 + new_corporate * 0.35 + new_subst * 0.25)
     score_delta = disrupted_score - baseline_score
 
