@@ -1,12 +1,24 @@
 import { useEffect, useRef, useState, useCallback } from "react";
-import { Maximize2, RotateCcw } from "lucide-react";
+import { Maximize2, RotateCcw, ChevronDown, ChevronUp } from "lucide-react";
+import { motion, AnimatePresence } from "framer-motion";
 
-const GlobeView = ({ arcs }: { arcs: any[] }) => {
+interface GlobeViewProps {
+    arcs: any[];
+    speedMultiplier?: number;
+    onSpeedChange?: (m: number) => void;
+}
+
+const SPEED_OPTIONS = [0.5, 1, 1.5, 2];
+
+const GlobeView = ({ arcs, speedMultiplier = 1, onSpeedChange }: GlobeViewProps) => {
     const globeRef = useRef<any>(null);
     const containerRef = useRef<HTMLDivElement>(null);
     const [Globe, setGlobe] = useState<any>(null);
     const [dimensions, setDimensions] = useState({ width: 0, height: 0 });
     const [isFocused, setIsFocused] = useState(false);
+    const [legendExpanded, setLegendExpanded] = useState(false);
+
+    const isSimulating = arcs.some((a: any) => a.status === 'disrupted');
 
     useEffect(() => {
         import("react-globe.gl").then((mod: { default: any }) => {
@@ -112,7 +124,7 @@ const GlobeView = ({ arcs }: { arcs: any[] }) => {
                 arcDashLength={0.5}
                 arcDashGap={0.5}
                 arcDashInitialGap={(d: any) => d.status === 'disrupted' ? 0 : (d.initialGap || 0)}
-                arcDashAnimateTime={(d: any) => d.status === 'disrupted' ? 0 : (d.animateTime || 2000)}
+                arcDashAnimateTime={(d: any) => d.status === 'disrupted' ? 0 : ((d.animateTime || 2000) / speedMultiplier)}
                 arcLabel="label"
                 onArcClick={handleArcClick}
                 pointsData={pointsData}
@@ -139,17 +151,66 @@ const GlobeView = ({ arcs }: { arcs: any[] }) => {
                 </div>
 
                 <div className="flex flex-col items-end gap-3">
-                    <div className="flex gap-3 pointer-events-auto bg-background/40 backdrop-blur-md p-2 rounded-lg border border-secondary/20">
-                        {[
-                            { color: 'bg-risk-high', label: 'Critical' },
-                            { color: 'bg-risk-mid', label: 'Warning' },
-                            { color: 'bg-risk-low', label: 'Nominal' },
-                        ].map((l) => (
-                            <div key={l.label} className="flex items-center gap-1.5">
-                                <div className={`w-2 h-2 rounded-full ${l.color}`} />
-                                <span className="text-[9px] text-muted-foreground">{l.label}</span>
-                            </div>
-                        ))}
+                    {/* Legend */}
+                    <div className="pointer-events-auto bg-background/40 backdrop-blur-md rounded-lg border border-secondary/20 overflow-hidden">
+                        <div className="flex items-center gap-3 p-2">
+                            {[
+                                { color: 'bg-risk-high', label: 'Critical' },
+                                { color: 'bg-risk-mid', label: 'Warning' },
+                                { color: 'bg-risk-low', label: 'Nominal' },
+                            ].map((l) => (
+                                <div key={l.label} className="flex items-center gap-1.5">
+                                    <div className={`w-2 h-2 rounded-full ${l.color}`} />
+                                    <span className="text-[9px] text-muted-foreground">{l.label}</span>
+                                </div>
+                            ))}
+                            <button
+                                onClick={() => setLegendExpanded(!legendExpanded)}
+                                className="ml-1 p-0.5 hover:bg-secondary/30 rounded transition-colors"
+                            >
+                                {legendExpanded ? <ChevronUp size={10} className="text-muted-foreground" /> : <ChevronDown size={10} className="text-muted-foreground" />}
+                            </button>
+                        </div>
+
+                        <AnimatePresence>
+                            {legendExpanded && (
+                                <motion.div
+                                    initial={{ height: 0, opacity: 0 }}
+                                    animate={{ height: 'auto', opacity: 1 }}
+                                    exit={{ height: 0, opacity: 0 }}
+                                    transition={{ duration: 0.2 }}
+                                    className="overflow-hidden"
+                                >
+                                    <div className="px-2 pb-2 pt-1 border-t border-secondary/20 space-y-1.5">
+                                        <div className="flex items-center gap-2">
+                                            <div className="w-6 h-[3px] bg-risk-high rounded-full" />
+                                            <span className="text-[8px] text-muted-foreground">High risk · HHI &gt; 2500 · Slow arc</span>
+                                        </div>
+                                        <div className="flex items-center gap-2">
+                                            <div className="w-6 h-[2px] bg-risk-mid rounded-full" />
+                                            <span className="text-[8px] text-muted-foreground">Elevated · HHI 1500–2500 · Medium</span>
+                                        </div>
+                                        <div className="flex items-center gap-2">
+                                            <div className="w-6 h-[1px] bg-risk-low rounded-full" />
+                                            <span className="text-[8px] text-muted-foreground">Low risk · HHI &lt; 1500 · Fast arc</span>
+                                        </div>
+                                        {isSimulating && (
+                                            <>
+                                                <div className="border-t border-secondary/20 pt-1.5 mt-1.5" />
+                                                <div className="flex items-center gap-2">
+                                                    <div className="w-6 h-[2px] bg-risk-high/40 rounded-full" />
+                                                    <span className="text-[8px] text-muted-foreground">Disrupted · Supply route severed</span>
+                                                </div>
+                                                <div className="flex items-center gap-2">
+                                                    <div className="w-6 h-[3px] bg-risk-mid rounded-full" />
+                                                    <span className="text-[8px] text-muted-foreground">Stressed · Downstream impact</span>
+                                                </div>
+                                            </>
+                                        )}
+                                    </div>
+                                </motion.div>
+                            )}
+                        </AnimatePresence>
                     </div>
 
                     <div className="flex gap-2 pointer-events-auto">
@@ -169,6 +230,25 @@ const GlobeView = ({ arcs }: { arcs: any[] }) => {
                     </div>
                 </div>
             </div>
+
+            {/* Speed Control */}
+            {onSpeedChange && (
+                <div className="absolute bottom-4 right-4 pointer-events-auto flex items-center gap-1 bg-background/40 backdrop-blur-md border border-secondary/20 rounded-lg p-1">
+                    {SPEED_OPTIONS.map((s) => (
+                        <button
+                            key={s}
+                            onClick={() => onSpeedChange(s)}
+                            className={`px-1.5 py-0.5 rounded text-[9px] font-mono transition-colors ${
+                                speedMultiplier === s
+                                    ? 'bg-primary/20 text-primary border border-primary/40'
+                                    : 'text-muted-foreground hover:text-foreground hover:bg-secondary/20 border border-transparent'
+                            }`}
+                        >
+                            {s}x
+                        </button>
+                    ))}
+                </div>
+            )}
 
             {/* Interaction Toast */}
             {!isFocused && arcs.length > 0 && (

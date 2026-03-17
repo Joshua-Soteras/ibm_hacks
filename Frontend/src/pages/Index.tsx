@@ -18,6 +18,7 @@ const Index = () => {
     const [selectedCompany, setSelectedCompany] = useState<string | null>(null);
     const [activeScenario, setActiveScenario] = useState<ScenarioCard | null>(null);
     const [simulationResult, setSimulationResult] = useState<SimulationResult | null>(null);
+    const [speedMultiplier, setSpeedMultiplier] = useState(1);
 
     const { steps, isStreaming, analysisResult, startStream } = useAnalysisStream();
     const { customSteps, isCustomStreaming, customResult, startCustomStream, resetCustom } = useCustomScenarioStream();
@@ -111,7 +112,15 @@ const Index = () => {
     });
 
     return (
-        <div className="h-screen w-screen bg-background p-4 grid grid-cols-12 grid-rows-6 gap-4 overflow-hidden">
+        <div className="h-screen w-screen bg-background flex flex-col overflow-hidden">
+            {/* Header */}
+            <div className="flex items-center gap-3 px-4 py-2 border-b border-border/40">
+                <img src="/roq-icon.png" alt="Roq" className="h-7 w-7 rounded" />
+                <h1 className="text-lg font-bold tracking-tight text-foreground">Roq</h1>
+                <span className="text-[10px] font-mono text-muted-foreground uppercase tracking-widest ml-1">Supply Chain Intelligence</span>
+            </div>
+            {/* Dashboard Grid */}
+            <div className="flex-1 p-4 grid grid-cols-12 grid-rows-6 gap-4 overflow-hidden">
             {/* Left Panel: Selector + Metrics + Scenarios */}
             <div className="col-span-3 row-span-6 flex flex-col gap-4 overflow-y-auto pr-1">
                 <div className="card-surface p-4">
@@ -134,14 +143,6 @@ const Index = () => {
                         <p className="text-[10px] font-mono text-muted-foreground mt-1">
                             Minerals: {analysis.minerals.join(', ')}
                         </p>
-                        <p className="text-[10px] font-mono text-muted-foreground mt-2 line-clamp-3 italic opacity-70">
-                           "{analysis.summary}"
-                        </p>
-                        {analysis.agent_enriched === false && (
-                            <span className="text-[8px] font-mono text-muted-foreground/50 mt-0.5 block">
-                                Local analysis (agent unavailable)
-                            </span>
-                        )}
                     </div>
                 )}
 
@@ -168,7 +169,7 @@ const Index = () => {
                         </div>
                     </div>
                 )}
-                <GlobeView arcs={arcs} />
+                <GlobeView arcs={arcs} speedMultiplier={speedMultiplier} onSpeedChange={setSpeedMultiplier} />
             </div>
 
             {/* Right Panel: Agent Workflow */}
@@ -178,7 +179,8 @@ const Index = () => {
 
             {/* Bottom: Risk Table */}
             <div className="col-span-6 row-span-2">
-                <RiskTable flows={analysis?.trade_flows || []} isLoading={isAnalyzing} />
+                <RiskTable flows={simulationResult?.disrupted_trade_flows || analysis?.trade_flows || []} isLoading={isAnalyzing} />
+            </div>
             </div>
         </div>
     );

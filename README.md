@@ -1,8 +1,14 @@
-<table width="100%" bgcolor="#061735"><tr><td align="center" style="padding: 32px 0 24px;">
-  <img src="./Roq_Icon.png" alt="Roq Logo" width="300" /><br/><br/>
-  <h1 style="color:#ffffff; margin: 0;">Roq</h1>
-  <h3 style="color:#a0b4c8; margin: 0;">AI-powered supply chain risk intelligence for semiconductor and electronics manufacturers</h3>
-</td></tr></table>
+<p align="center">
+  <img src="Roq_Icon.png" alt="Roq" width="120" />
+</p>
+
+<h1 align="center">Roq</h1>
+
+<p align="center">
+  <strong>AI-powered supply chain risk intelligence for semiconductor and electronics manufacturers</strong>
+</p>
+
+---
 
 Roq is a hackathon project built for IBM that surfaces hidden mineral supply chain risks buried in SEC filings, USGS data, and global trade flows — then lets you simulate disruptions in real time using an AI agent orchestration backend powered by IBM Watson Orchestrate.
 
@@ -10,7 +16,7 @@ Roq is a hackathon project built for IBM that surfaces hidden mineral supply cha
 
 ## Demo
 
-> 📸 _Screenshots and demo video coming soon._
+> Screenshots and demo video coming soon.
 
 ---
 

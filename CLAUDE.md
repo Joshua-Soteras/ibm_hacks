@@ -57,16 +57,17 @@ Optional: `BACKEND_API_URL` — public URL of the FastAPI backend (e.g. ngrok tu
 
 **Dashboard Panels** (composed in `src/pages/Index.tsx`):
 - **CompanySelector** — dropdown to pick a company for analysis
-- **MetricsPanel** — risk score, trade concentration, corporate exposure, substitutability; shows disrupted scores + delta during simulation
-- **GlobeView** — 3D globe with supply arcs colored by risk level; risk-proportional thickness (high=1.2, elevated=0.8, low=0.4) and animation speed (high=4s slow, elevated=2.5s, low=1.2s fast); staggered arc launches via `arcDashInitialGap`; supports disrupted/stressed/active arc states during simulation (disrupted uses `rgba()` notation for Three.js-compatible transparent colors)
-- **AgentWorkflow** — real-time agent execution timeline streamed via SSE from `/api/analyze-stream/{company}`; expandable full agent output on steps with truncated content (animated expand/collapse)
+- **MetricsPanel** — risk score, trade concentration, corporate exposure, substitutability; shows disrupted scores + delta during simulation; hover tooltips on each metric explaining its computation; Risk Score value color-coded by severity (red >70, amber 30–70, green <30); animated value transitions on score changes
+- **GlobeView** — 3D globe with supply arcs colored by risk level; risk-proportional thickness (high=1.2, elevated=0.8, low=0.4) and animation speed (high=4s slow, elevated=2.5s, low=1.2s fast); staggered arc launches via `arcDashInitialGap`; supports disrupted/stressed/active arc states during simulation (disrupted uses `rgba()` notation for Three.js-compatible transparent colors); expandable legend with line-thickness explanations and disruption states; arc speed multiplier control (0.5x–2x) in bottom-right corner
+- **AgentWorkflow** — real-time agent execution timeline streamed via SSE from `/api/analyze-stream/{company}`; expandable full agent output on steps with truncated content (animated expand/collapse); markdown rendering for agent output via `react-markdown`
 - **ScenariosPanel** — dynamic disruption scenario cards generated from trade concentration data; click-to-simulate with reset; custom free-text scenario input that invokes the cloud agent
-- **RiskTable** — sortable trade flow table with concentration bars (click column headers to sort)
+- **RiskTable** — sortable trade flow table with concentration bars (click column headers to sort); threshold markers at 30% and 70% on concentration bars; disrupted/stressed flow count badges in header during simulation; receives disrupted trade flows from simulation results
 
 **Key Frontend Files:**
 - `src/hooks/useAnalysisStream.ts` — SSE hook using `EventSource` API, manages 4-step agent workflow state; `AgentStepData` includes optional `full_output` for untruncated agent text
 - `src/hooks/useCustomScenarioStream.ts` — SSE hook for free-text custom scenario analysis via `/api/custom-scenario-stream/{company}`; stores `full_output` from SSE events
 - `src/lib/api.ts` — Axios API client with TypeScript interfaces (`ScenarioCard`, `SimulationResult`)
+- `src/components/ui/markdown.tsx` — shared Markdown renderer (`react-markdown`) with dark-theme styling for agent output and summaries
 - `src/data/countryCoords.json` — ~130 country centroid coordinates for globe arc rendering
 - `src/data/simulatedData.ts` — legacy mock data (no longer imported by any component)
 
@@ -97,14 +98,17 @@ Optional: `BACKEND_API_URL` — public URL of the FastAPI backend (e.g. ngrok tu
 - `_get_corporate_data_for_company(conn, minerals)` — USGS-based corporate + substitutability scores
 - `analyze_company(company)` — full analysis (calls both helpers), same return shape as before
 - `get_company_scenarios(company)` — generates up to 5 disruption scenarios from concentrated trade flows
-- `simulate_company_disruption(company, country, mineral, disruption_pct)` — re-scores with a country/mineral removed, uplifts corporate by 15, marks flows as disrupted/stressed/active
+- `simulate_company_disruption(company, country, mineral, disruption_pct)` — re-scores with a single country/mineral removed; floors trade score at baseline (disruption can never improve it) + supply gap penalty; uplifts corporate by 15; marks flows as disrupted/stressed/active
+- `simulate_multi_disruption(company, country, minerals_to_disrupt, disruption_pct)` — multi-mineral variant; `minerals_to_disrupt=None` disrupts all minerals from that country; scales corporate uplift by `15 × num_minerals` (capped at 100); same floor + gap penalty trade model; returns `disrupted_minerals` list in result
 - `get_mineral_trade_flows(mineral, year)` — import volumes grouped by country (ADK tool callback)
 - `get_mineral_profile_data(mineral)` — structured mineral profile from USGS/EDGAR (ADK tool callback)
 - `get_company_dependencies(company)` — mineral dependencies with severity from matrix + filing fallback (ADK tool callback)
 - `get_risk_summary(company, mineral)` — company-centric or mineral-centric risk summary (ADK tool callback)
 - `lookup_edgar_cik(company)` — CIK lookup from EDGAR data (ADK tool callback)
 
-**`agent_client.py`** — IBM Watson Orchestrate RunClient integration for invoking the deployed `risk_orchestrator` agent. Uses IAM authentication, agent UUID resolution, and polling for run completion. Falls back to keyword-based extraction + local `simulate_company_disruption()` if the agent is unavailable. Powers both `/api/analyze-stream/{company}` (concurrent agent + local analytics) and `/api/custom-scenario-stream/{company}` (agent-only with simulation). Includes apology/refusal detection (`_is_agent_useful()`) — when the cloud LLM returns conversational refusals instead of tool outputs, the local analytics summary is preserved and the result includes `agent_enriched: false`. SSE events include `full_output` field with untruncated agent text when the response exceeds the display truncation threshold (300 chars for standard analysis, 600 chars for custom scenarios).
+**`agent_client.py`** — IBM Watson Orchestrate RunClient integration for invoking the deployed `risk_orchestrator` agent. Uses IAM authentication, agent UUID resolution, and polling for run completion. Falls back to keyword-based extraction + local simulation if the agent is unavailable. Powers both `/api/analyze-stream/{company}` (concurrent agent + local analytics) and `/api/custom-scenario-stream/{company}` (agent-only with simulation). Includes apology/refusal detection (`_is_agent_useful()`) — when the cloud LLM returns conversational refusals instead of tool outputs, the local analytics summary is preserved and the result includes `agent_enriched: false`. SSE events include `full_output` field with untruncated agent text when the response exceeds the display truncation threshold (300 chars for standard analysis, 600 chars for custom scenarios).
+
+Custom scenario extraction pipeline: `_extract_country_mineral()` returns `(country, minerals_list)` — detects broad patterns ("all mineral", "all export") returning `["__ALL__"]` sentinel, or collects all individually matched minerals. `_infer_disruption_pct()` parses scenario language: "ban/embargo/block/halt/stop" → 100%, "restrict/limit/reduce" → 50%, default 75%. Routes to `simulate_multi_disruption()` for multi-mineral or `__ALL__` scenarios, `simulate_company_disruption()` for single-mineral.
 
 **`analytics.py`** includes `resolve_company_name()` which normalizes company names for callback endpoints. Handles LLM-reformulated names (e.g., "Amazon.com Inc" → "AMAZON COM INC") by stripping punctuation and doing case-insensitive matching against the DB.
 
