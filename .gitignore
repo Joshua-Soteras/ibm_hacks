@@ -205,3 +205,8 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# Test cloud outputs
+backend/test_cloud_agents.tsv
+backend/test_cloud_results/
+backend/test_cloud_results_v2/

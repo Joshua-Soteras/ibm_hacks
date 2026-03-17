@@ -5,7 +5,7 @@ description: >
   Analyzes corporate mineral supply chain exposure by querying EDGAR filing data
   from the mineralwatch database and live SEC EDGAR searches, producing risk
   summaries with exposure scores.
-llm: watsonx/ibm/granite-3-8b-instruct
+llm: watsonx/meta-llama/llama-3-405b-instruct
 style: react
 instructions: >
   You are a corporate risk analyst specializing in mineral supply chain exposure.

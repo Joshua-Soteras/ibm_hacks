@@ -4,7 +4,10 @@ import json
 
 from ibm_watsonx_orchestrate.agent_builder.tools import tool
 
-from ._db import get_db_conn, DEFAULT_RISK_SCORE
+import sys as _sys
+from pathlib import Path as _Path
+_sys.path.insert(0, str(_Path(__file__).resolve().parent))
+from _db import get_db_conn, DEFAULT_RISK_SCORE
 
 RISK_SCORE_MAP = {
     "CRITICAL": 90,

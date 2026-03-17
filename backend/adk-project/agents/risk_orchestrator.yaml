@@ -4,7 +4,7 @@ name: risk_orchestrator
 description: >
   Top-level orchestrator that coordinates trade intelligence and corporate exposure
   agents to produce composite supply-chain risk assessments and disruption simulations.
-llm: watsonx/ibm/granite-3-8b-instruct
+llm: watsonx/meta-llama/llama-3-405b-instruct
 style: planner
 instructions: >
   You are the lead risk orchestrator for the MineralWatch supply chain intelligence
