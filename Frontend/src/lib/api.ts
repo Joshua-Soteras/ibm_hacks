@@ -19,6 +19,7 @@ export interface SimulationResult {
     severity: "critical" | "high" | "moderate" | "low";
     supply_gap_pct: number;
     disrupted_mineral: string;
+    disrupted_minerals?: string[];
     disrupted_country: string;
     disrupted_breakdown: {
         trade: number;

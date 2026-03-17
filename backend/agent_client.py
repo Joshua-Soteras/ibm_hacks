@@ -86,23 +86,49 @@ def _get_known_countries_and_minerals():
         return [], []
 
 
+_BROAD_MINERAL_PATTERNS = [
+    "all mineral", "all export", "every mineral", "all critical mineral",
+    "all rare earth", "all imports", "all supply",
+]
+
+
+def _infer_disruption_pct(scenario_text: str) -> float:
+    """Infer disruption percentage from scenario language."""
+    text_lower = scenario_text.lower()
+    ban_keywords = ["ban", "embargo", "block", "halt", "stop", "prohibit", "cut off", "all export"]
+    restrict_keywords = ["restrict", "limit", "reduce", "curtail", "partial"]
+    if any(k in text_lower for k in ban_keywords):
+        return 100.0
+    if any(k in text_lower for k in restrict_keywords):
+        return 50.0
+    return 75.0
+
+
 def _extract_country_mineral(scenario_text: str, countries: list, minerals: list):
-    """Case-insensitive keyword extraction of country and mineral from scenario text."""
+    """Case-insensitive keyword extraction of country and minerals from scenario text.
+
+    Returns (matched_country, matched_minerals: list).
+    A sentinel ["__ALL__"] means "all minerals from this country".
+    """
     text_lower = scenario_text.lower()
     matched_country = None
-    matched_mineral = None
+    matched_minerals = []
 
     for c in sorted(countries, key=len, reverse=True):
         if c.lower() in text_lower:
             matched_country = c
             break
 
+    # Check for broad mineral patterns first
+    if any(p in text_lower for p in _BROAD_MINERAL_PATTERNS):
+        return matched_country, ["__ALL__"]
+
+    # Collect all matching minerals
     for m in sorted(minerals, key=len, reverse=True):
         if m.lower() in text_lower:
-            matched_mineral = m
-            break
+            matched_minerals.append(m)
 
-    return matched_country, matched_mineral
+    return matched_country, matched_minerals
 
 
 def _try_agent_stream(company: str, scenario_text: str):
@@ -215,39 +241,57 @@ def _try_agent_stream(company: str, scenario_text: str):
                 "trace": "> Generating structured disruption model...",
             })
 
-            countries, minerals = _get_known_countries_and_minerals()
-            matched_country, matched_mineral = _extract_country_mineral(scenario_text, countries, minerals)
+            countries, minerals_list = _get_known_countries_and_minerals()
+            matched_country, matched_minerals = _extract_country_mineral(scenario_text, countries, minerals_list)
+            disruption_pct = _infer_disruption_pct(scenario_text)
 
             # Also try to extract from agent response if prompt didn't have explicit matches
-            if not matched_country or not matched_mineral:
+            if not matched_country or not matched_minerals:
                 full_text = scenario_text + " " + agent_text
-                c2, m2 = _extract_country_mineral(full_text, countries, minerals)
+                c2, m2 = _extract_country_mineral(full_text, countries, minerals_list)
                 matched_country = matched_country or c2
-                matched_mineral = matched_mineral or m2
+                if not matched_minerals:
+                    matched_minerals = m2
 
             # Fill in missing side from trade flows
-            if not matched_mineral or not matched_country:
+            if not matched_minerals or not matched_country:
                 from analytics import analyze_company
                 baseline = analyze_company(company)
                 if baseline:
-                    for flow in baseline["trade_flows"]:
-                        if matched_mineral and not matched_country and flow["mineral"].lower() == matched_mineral.lower() and flow["share"] > 20:
-                            matched_country = flow["country"]
-                            break
-                        if matched_country and not matched_mineral and flow["country"].lower() == matched_country.lower() and flow["share"] > 20:
-                            matched_mineral = flow["mineral"]
-                            break
+                    if matched_minerals and matched_minerals != ["__ALL__"] and not matched_country:
+                        for flow in baseline["trade_flows"]:
+                            if flow["mineral"].lower() == matched_minerals[0].lower() and flow["share"] > 20:
+                                matched_country = flow["country"]
+                                break
+                    elif matched_country and not matched_minerals:
+                        best = max(
+                            (f for f in baseline["trade_flows"] if f["country"].lower() == matched_country.lower() and f["share"] > 20),
+                            key=lambda f: f["share"], default=None,
+                        )
+                        if best:
+                            matched_minerals = [best["mineral"]]
 
-            if matched_country and matched_mineral:
-                from analytics import simulate_company_disruption
-                sim_result = simulate_company_disruption(company, matched_country, matched_mineral, 75.0)
+            is_multi = matched_minerals == ["__ALL__"] or len(matched_minerals) > 1
+
+            if matched_country and matched_minerals:
+                if is_multi:
+                    from analytics import simulate_multi_disruption
+                    sim_result = simulate_multi_disruption(
+                        company, matched_country,
+                        None if matched_minerals == ["__ALL__"] else matched_minerals,
+                        disruption_pct,
+                    )
+                else:
+                    from analytics import simulate_company_disruption
+                    sim_result = simulate_company_disruption(company, matched_country, matched_minerals[0], disruption_pct)
 
                 if sim_result:
+                    mineral_desc = sim_result.get("disrupted_mineral", ", ".join(matched_minerals))
                     yield _emit({
                         "stage": "agent_response",
                         "title": "Risk Orchestrator — Response",
                         "status": "completed",
-                        "trace": f"> Simulation: {matched_country} × {matched_mineral}\n> Baseline: {sim_result['baseline_score']} → Disrupted: {sim_result['disrupted_score']} (Δ{sim_result['score_delta']:+d})\n> Severity: {sim_result['severity']}",
+                        "trace": f"> Simulation: {matched_country} × {mineral_desc} ({disruption_pct:.0f}% disruption)\n> Baseline: {sim_result['baseline_score']} → Disrupted: {sim_result['disrupted_score']} (Δ{sim_result['score_delta']:+d})\n> Severity: {sim_result['severity']}",
                     })
                     time.sleep(0.1)
                     yield _emit({"stage": "complete", "result": sim_result})
@@ -298,10 +342,11 @@ def _fallback_stream(company: str, scenario_text: str):
     })
     time.sleep(0.3)
 
-    countries, minerals = _get_known_countries_and_minerals()
-    matched_country, matched_mineral = _extract_country_mineral(scenario_text, countries, minerals)
+    countries, minerals_list = _get_known_countries_and_minerals()
+    matched_country, matched_minerals = _extract_country_mineral(scenario_text, countries, minerals_list)
+    disruption_pct = _infer_disruption_pct(scenario_text)
 
-    if not matched_country and not matched_mineral:
+    if not matched_country and not matched_minerals:
         yield _emit({
             "stage": "agent_reasoning",
             "title": "Risk Orchestrator — Analyzing",
@@ -314,8 +359,10 @@ def _fallback_stream(company: str, scenario_text: str):
     trace_parts = ["> Keyword extraction results:"]
     if matched_country:
         trace_parts.append(f">   Country: {matched_country}")
-    if matched_mineral:
-        trace_parts.append(f">   Mineral: {matched_mineral}")
+    if matched_minerals:
+        mineral_label = "all minerals" if matched_minerals == ["__ALL__"] else ", ".join(matched_minerals)
+        trace_parts.append(f">   Mineral(s): {mineral_label}")
+    trace_parts.append(f">   Disruption: {disruption_pct:.0f}%")
 
     yield _emit({
         "stage": "agent_reasoning",
@@ -325,30 +372,34 @@ def _fallback_stream(company: str, scenario_text: str):
     })
     time.sleep(0.2)
 
+    mineral_preview = "all minerals" if matched_minerals == ["__ALL__"] else ", ".join(matched_minerals) if matched_minerals else "Any"
     yield _emit({
         "stage": "agent_response",
         "title": "Risk Orchestrator — Simulating",
         "status": "active",
-        "trace": f"> Running disruption simulation (75% disruption)...\n> {matched_country or 'Any'} × {matched_mineral or 'Any'}",
+        "trace": f"> Running disruption simulation ({disruption_pct:.0f}% disruption)...\n> {matched_country or 'Any'} × {mineral_preview}",
     })
     time.sleep(0.3)
 
-    from analytics import simulate_company_disruption, analyze_company
+    from analytics import simulate_company_disruption, simulate_multi_disruption, analyze_company
 
-    if not matched_mineral or not matched_country:
+    if not matched_minerals or not matched_country:
         baseline = analyze_company(company)
         if baseline:
-            for flow in baseline["trade_flows"]:
-                if matched_mineral and not matched_country and flow["mineral"].lower() == matched_mineral.lower():
-                    if flow["share"] > 20:
+            if matched_minerals and matched_minerals != ["__ALL__"] and not matched_country:
+                for flow in baseline["trade_flows"]:
+                    if flow["mineral"].lower() == matched_minerals[0].lower() and flow["share"] > 20:
                         matched_country = flow["country"]
                         break
-                if matched_country and not matched_mineral and flow["country"].lower() == matched_country.lower():
-                    if flow["share"] > 20:
-                        matched_mineral = flow["mineral"]
-                        break
+            elif matched_country and not matched_minerals:
+                best = max(
+                    (f for f in baseline["trade_flows"] if f["country"].lower() == matched_country.lower() and f["share"] > 20),
+                    key=lambda f: f["share"], default=None,
+                )
+                if best:
+                    matched_minerals = [best["mineral"]]
 
-    if not matched_country or not matched_mineral:
+    if not matched_country or not matched_minerals:
         yield _emit({
             "stage": "agent_response",
             "title": "Risk Orchestrator — Response",
@@ -358,19 +409,29 @@ def _fallback_stream(company: str, scenario_text: str):
         yield _emit({"stage": "error", "error": "Need both a country and mineral to simulate. Try: 'What if China restricts Gallium exports?'"})
         return
 
-    result = simulate_company_disruption(company, matched_country, matched_mineral, 75.0)
+    is_multi = matched_minerals == ["__ALL__"] or len(matched_minerals) > 1
+
+    if is_multi:
+        result = simulate_multi_disruption(
+            company, matched_country,
+            None if matched_minerals == ["__ALL__"] else matched_minerals,
+            disruption_pct,
+        )
+    else:
+        result = simulate_company_disruption(company, matched_country, matched_minerals[0], disruption_pct)
 
     if result:
+        mineral_desc = result.get("disrupted_mineral", mineral_preview)
         yield _emit({
             "stage": "agent_response",
             "title": "Risk Orchestrator — Response",
             "status": "completed",
-            "trace": f"> Simulation complete\n> Baseline: {result['baseline_score']} → Disrupted: {result['disrupted_score']} (Δ{result['score_delta']:+d})\n> Severity: {result['severity']}",
+            "trace": f"> Simulation complete ({disruption_pct:.0f}% disruption)\n> Baseline: {result['baseline_score']} → Disrupted: {result['disrupted_score']} (Δ{result['score_delta']:+d})\n> Severity: {result['severity']}",
         })
         time.sleep(0.1)
         yield _emit({"stage": "complete", "result": result})
     else:
-        yield _emit({"stage": "error", "error": f"Simulation failed for {company} / {matched_country} / {matched_mineral}"})
+        yield _emit({"stage": "error", "error": f"Simulation failed for {company} / {matched_country} / {mineral_preview}"})
 
 
 def _run_local_analytics(company: str):

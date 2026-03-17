@@ -327,7 +327,15 @@ def simulate_company_disruption(company_name, country, mineral, disruption_pct=1
         mineral_hhis = []
 
     avg_hhi = np.mean(mineral_hhis) if mineral_hhis else 0
-    new_trade_score = round(_normalize_hhi(avg_hhi * 10000))
+    new_hhi_trade = round(_normalize_hhi(avg_hhi * 10000))
+
+    # Floor: disruption can never IMPROVE trade score
+    new_trade_score = max(new_hhi_trade, baseline_trade)
+
+    # Supply gap penalty: losing X% of a mineral's supply adds proportional risk
+    avg_gap = supply_gap / len(minerals) if minerals else 0
+    gap_penalty = avg_gap * 0.6
+    new_trade_score = min(round(new_trade_score + gap_penalty), 100)
 
     # Uplift corporate score by 15 (capped at 100) per system design
     new_corporate = min(baseline_corporate + 15, 100)
@@ -361,6 +369,123 @@ def simulate_company_disruption(company_name, country, mineral, disruption_pct=1
         },
         "disrupted_trade_flows": disrupted_flows
     }
+
+
+def simulate_multi_disruption(company_name, country, minerals_to_disrupt=None, disruption_pct=100.0):
+    """Simulate a multi-mineral supply disruption from a single country.
+
+    If minerals_to_disrupt is None, disrupts all minerals with trade flows from that country.
+    """
+    baseline = analyze_company(company_name)
+    if not baseline:
+        return None
+
+    baseline_score = baseline["score"]
+    baseline_trade = baseline["breakdown"]["trade"]
+    baseline_corporate = baseline["breakdown"]["corporate"]
+    baseline_subst = baseline["breakdown"]["substitutability"]
+    all_minerals = baseline["minerals"]
+
+    # Determine which minerals to disrupt
+    if minerals_to_disrupt is None:
+        minerals_to_disrupt = list({
+            flow["mineral"] for flow in baseline["trade_flows"]
+            if flow["country"].lower() == country.lower()
+        })
+
+    if not minerals_to_disrupt:
+        return None
+
+    disrupted_set = {m.lower() for m in minerals_to_disrupt}
+
+    # Build disrupted trade flows and track supply gaps per mineral
+    disrupted_flows = []
+    mineral_gaps = {}
+
+    for flow in baseline["trade_flows"]:
+        is_disrupted_mineral = flow["mineral"].lower() in disrupted_set
+        if is_disrupted_mineral and flow["country"].lower() == country.lower():
+            gap = flow["share"] * (disruption_pct / 100.0)
+            mineral_gaps[flow["mineral"]] = mineral_gaps.get(flow["mineral"], 0) + gap
+            remaining_share = flow["share"] * (1 - disruption_pct / 100.0)
+            if remaining_share > 0.1:
+                disrupted_flows.append({**flow, "share": round(remaining_share, 1), "status": "disrupted"})
+            else:
+                disrupted_flows.append({**flow, "share": 0, "status": "disrupted"})
+        elif is_disrupted_mineral:
+            disrupted_flows.append({**flow, "status": "stressed"})
+        else:
+            disrupted_flows.append({**flow, "status": "active"})
+
+    # Recompute HHI for all minerals
+    try:
+        conn = get_db_conn()
+        mineral_hhis = []
+        val_col = 'Customs Value (USD)'
+        for m in all_minerals:
+            query_trade = "SELECT * FROM trade_data WHERE Mineral LIKE ?"
+            mineral_trade = pd.read_sql_query(query_trade, conn, params=(f"%{m}%",))
+            if not mineral_trade.empty:
+                if m.lower() in disrupted_set:
+                    mineral_trade.loc[
+                        mineral_trade['Country'].str.lower() == country.lower(), val_col
+                    ] = mineral_trade.loc[
+                        mineral_trade['Country'].str.lower() == country.lower(), val_col
+                    ] * (1 - disruption_pct / 100.0)
+                hhi = compute_hhi(mineral_trade)
+                mineral_hhis.append(hhi)
+        conn.close()
+    except Exception:
+        mineral_hhis = []
+
+    avg_hhi = np.mean(mineral_hhis) if mineral_hhis else 0
+    new_hhi_trade = round(_normalize_hhi(avg_hhi * 10000))
+
+    # Floor: disruption can never IMPROVE trade score
+    new_trade_score = max(new_hhi_trade, baseline_trade)
+
+    # Supply gap penalty
+    total_gap = sum(mineral_gaps.values())
+    avg_gap = total_gap / len(all_minerals) if all_minerals else 0
+    gap_penalty = avg_gap * 0.6
+    new_trade_score = min(round(new_trade_score + gap_penalty), 100)
+
+    # Scale corporate uplift by number of disrupted minerals
+    num_disrupted = len(minerals_to_disrupt)
+    corporate_uplift = min(15 * num_disrupted, 100 - baseline_corporate)
+    new_corporate = min(baseline_corporate + corporate_uplift, 100)
+    new_subst = baseline_subst
+
+    disrupted_score = round(new_trade_score * 0.40 + new_corporate * 0.35 + new_subst * 0.25)
+    score_delta = disrupted_score - baseline_score
+
+    if score_delta >= 20:
+        severity = "critical"
+    elif score_delta >= 10:
+        severity = "high"
+    elif score_delta >= 5:
+        severity = "moderate"
+    else:
+        severity = "low"
+
+    return {
+        "company": company_name,
+        "baseline_score": baseline_score,
+        "disrupted_score": disrupted_score,
+        "score_delta": score_delta,
+        "severity": severity,
+        "supply_gap_pct": round(total_gap / num_disrupted, 1) if num_disrupted else 0,
+        "disrupted_mineral": ", ".join(minerals_to_disrupt),
+        "disrupted_country": country,
+        "disrupted_minerals": minerals_to_disrupt,
+        "disrupted_breakdown": {
+            "trade": new_trade_score,
+            "corporate": new_corporate,
+            "substitutability": new_subst
+        },
+        "disrupted_trade_flows": disrupted_flows
+    }
+
 
 def get_all_minerals():
     """Get list of all critical minerals tracked."""
