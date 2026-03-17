@@ -1,5 +1,4 @@
 import { motion } from "framer-motion";
-import { scenarios } from "@/data/simulatedData";
 
 const Sparkline = ({ data }: { data: number[] }) => {
     const max = Math.max(...data);
@@ -16,7 +15,18 @@ const Sparkline = ({ data }: { data: number[] }) => {
     );
 };
 
-const ScenariosPanel = () => {
+const ScenariosPanel = ({ scenarios }: { scenarios: any[] }) => {
+    if (!scenarios || scenarios.length === 0) {
+        return (
+            <div className="flex flex-col gap-3">
+                <h3 className="text-[10px] text-muted-foreground uppercase font-bold tracking-widest px-1">Probable Scenarios</h3>
+                <div className="card-surface p-4 text-center">
+                    <span className="text-[10px] font-mono text-muted-foreground italic">Select a company for scenario modeling</span>
+                </div>
+            </div>
+        );
+    }
+
     return (
         <motion.div
             initial={{ opacity: 0, x: -20 }}

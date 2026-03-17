@@ -112,6 +112,42 @@ def analyze_company(company_name):
     # 4. Summary
     summary = company_filings['Snippet'].iloc[0] if 'Snippet' in company_filings.columns else "No specific filing snippets found."
 
+    # 4. Scenarios
+    scenarios = [
+        {
+            "id": 1,
+            "title": "Taiwan Strait Disruption",
+            "probability": 15 + (composite_score // 5),
+            "impact": "high" if composite_score > 60 else "mid",
+            "costDelta": round(10.5 + (composite_score / 10), 1),
+            "sparkline": [30, 32, 45, 38, 52, 60, 58]
+        },
+        {
+            "id": 2,
+            "title": "Port Congestion (LA/LB)",
+            "probability": 40 + (composite_score // 10),
+            "impact": "mid",
+            "costDelta": round(4.2 + (composite_score / 20), 1),
+            "sparkline": [20, 25, 22, 30, 28, 35, 33]
+        },
+        {
+            "id": 3,
+            "title": "Carrier Rate Surge Q2",
+            "probability": 60,
+            "impact": "low" if composite_score < 40 else "mid",
+            "costDelta": round(2.8 + (composite_score / 50), 1),
+            "sparkline": [15, 18, 20, 25, 22, 28, 30]
+        },
+        {
+            "id": 4,
+            "title": "Alternative Supplier Online",
+            "probability": 30 - (composite_score // 10),
+            "impact": "low",
+            "costDelta": round(-3.1 - (composite_score / 100), 1),
+            "sparkline": [40, 38, 35, 30, 32, 28, 25]
+        }
+    ]
+
     conn.close()
     
     return {
@@ -124,7 +160,8 @@ def analyze_company(company_name):
         },
         "minerals": minerals,
         "trade_flows": trade_flows,
-        "summary": summary
+        "summary": summary,
+        "scenarios": scenarios
     }
 
 def get_all_minerals():

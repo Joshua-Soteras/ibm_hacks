@@ -71,7 +71,7 @@ const Index = () => {
                 )}
 
                 <MetricsPanel analysis={analysis} isLoading={isAnalyzing} />
-                <ScenariosPanel />
+                <ScenariosPanel scenarios={analysis?.scenarios || []} />
             </div>
 
             {/* Center: Globe */}
@@ -89,7 +89,7 @@ const Index = () => {
 
             {/* Right Panel: Agent Workflow */}
             <div className="col-span-3 row-span-6">
-                <AgentWorkflow isAnalyzing={isAnalyzing} />
+                <AgentWorkflow isAnalyzing={isAnalyzing} selectedCompany={selectedCompany} />
             </div>
 
             {/* Bottom: Risk Table */}
