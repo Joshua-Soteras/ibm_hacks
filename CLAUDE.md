@@ -58,7 +58,7 @@ Optional: `BACKEND_API_URL` — public URL of the FastAPI backend (e.g. ngrok tu
 **Dashboard Panels** (composed in `src/pages/Index.tsx`):
 - **CompanySelector** — dropdown to pick a company for analysis
 - **MetricsPanel** — risk score, trade concentration, corporate exposure, substitutability; shows disrupted scores + delta during simulation
-- **GlobeView** — 3D globe with supply arcs colored by risk level; supports disrupted/stressed/active arc states during simulation
+- **GlobeView** — 3D globe with supply arcs colored by risk level; risk-proportional thickness (high=1.2, elevated=0.8, low=0.4) and animation speed (high=4s slow, elevated=2.5s, low=1.2s fast); staggered arc launches via `arcDashInitialGap`; supports disrupted/stressed/active arc states during simulation (disrupted uses `rgba()` notation for Three.js-compatible transparent colors)
 - **AgentWorkflow** — real-time agent execution timeline streamed via SSE from `/api/analyze-stream/{company}`; expandable full agent output on steps with truncated content (animated expand/collapse)
 - **ScenariosPanel** — dynamic disruption scenario cards generated from trade concentration data; click-to-simulate with reset; custom free-text scenario input that invokes the cloud agent
 - **RiskTable** — sortable trade flow table with concentration bars (click column headers to sort)

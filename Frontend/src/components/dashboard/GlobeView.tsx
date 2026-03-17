@@ -111,7 +111,8 @@ const GlobeView = ({ arcs }: { arcs: any[] }) => {
                 arcStroke={(d: any) => d.stroke || 0.8}
                 arcDashLength={0.5}
                 arcDashGap={0.5}
-                arcDashAnimateTime={(d: any) => d.status === 'disrupted' ? 0 : 2000}
+                arcDashInitialGap={(d: any) => d.status === 'disrupted' ? 0 : (d.initialGap || 0)}
+                arcDashAnimateTime={(d: any) => d.status === 'disrupted' ? 0 : (d.animateTime || 2000)}
                 arcLabel="label"
                 onArcClick={handleArcClick}
                 pointsData={pointsData}

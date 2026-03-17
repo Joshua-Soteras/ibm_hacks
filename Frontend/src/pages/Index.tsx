@@ -75,17 +75,19 @@ const Index = () => {
 
     // Map trade flows to globe arcs — use disrupted flows when simulation is active
     const flows = simulationResult?.disrupted_trade_flows || analysis?.trade_flows || [];
-    const arcs = flows.map((f: any) => {
+    const arcs = flows.map((f: any, index: number) => {
         const start = countryCoords[f.country] || [0, 0];
         const end = [37.09, -95.71]; // USA
 
         let color = f.risk === 'high' ? '#ef4444' : f.risk === 'elevated' ? '#f59e0b' : '#22c55e';
-        let stroke = 0.8;
+        let stroke = f.risk === 'high' ? 1.2 : f.risk === 'elevated' ? 0.8 : 0.4;
+        let animateTime = f.risk === 'high' ? 4000 : f.risk === 'elevated' ? 2500 : 1200;
         let status = f.status || 'active';
+        const initialGap = (index / flows.length) * 2;
 
         if (simulationResult) {
             if (status === 'disrupted') {
-                color = '#ef444466'; // ghost red
+                color = 'rgba(239, 68, 68, 0.4)'; // ghost red
                 stroke = 0.3;
             } else if (status === 'stressed') {
                 color = '#f59e0b';
@@ -101,6 +103,8 @@ const Index = () => {
             color,
             stroke,
             status,
+            animateTime,
+            initialGap,
             label: `${f.mineral}: ${f.country} → USA (${f.share}%)`,
             riskLevel: f.risk
         };
