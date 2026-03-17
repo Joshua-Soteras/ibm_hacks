@@ -34,14 +34,12 @@ const ScenariosPanel = ({ scenarios, isLoading, activeScenarioId, onSimulate, on
         );
     }
 
-    if (scenarios.length === 0) {
+    if (!scenarios || scenarios.length === 0) {
         return (
             <div className="flex flex-col gap-3">
                 <h3 className="text-[10px] text-muted-foreground uppercase font-bold tracking-widest px-1">Probable Scenarios</h3>
-                <div className="card-surface p-4 flex items-center justify-center">
-                    <span className="text-[10px] font-mono text-muted-foreground">
-                        {scenarios.length === 0 ? 'Select a company to view scenarios' : 'No high-concentration scenarios found'}
-                    </span>
+                <div className="card-surface p-4 text-center">
+                    <span className="text-[10px] font-mono text-muted-foreground italic">Select a company for scenario modeling</span>
                 </div>
             </div>
         );

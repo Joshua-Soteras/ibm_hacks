@@ -1,10 +1,12 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useCallback } from "react";
+import { Maximize2, RotateCcw } from "lucide-react";
 
 const GlobeView = ({ arcs }: { arcs: any[] }) => {
     const globeRef = useRef<any>(null);
     const containerRef = useRef<HTMLDivElement>(null);
     const [Globe, setGlobe] = useState<any>(null);
     const [dimensions, setDimensions] = useState({ width: 0, height: 0 });
+    const [isFocused, setIsFocused] = useState(false);
 
     useEffect(() => {
         import("react-globe.gl").then((mod: { default: any }) => {
@@ -22,24 +24,67 @@ const GlobeView = ({ arcs }: { arcs: any[] }) => {
         return () => obs.disconnect();
     }, []);
 
-    useEffect(() => {
+    const resetView = useCallback(() => {
         if (globeRef.current) {
+            globeRef.current.pointOfView({ lat: 20, lng: 100, altitude: 2.5 }, 1000);
+            setIsFocused(false);
+
+            const controls = globeRef.current.controls();
+            if (controls) {
+                controls.autoRotate = true;
+            }
+        }
+    }, []);
+
+    useEffect(() => {
+        if (globeRef.current && Globe) {
             const controls = globeRef.current.controls();
             if (controls) {
                 controls.autoRotate = true;
                 controls.autoRotateSpeed = 0.4;
                 controls.enableZoom = true;
             }
-            globeRef.current.pointOfView({ lat: 20, lng: 100, altitude: 2.5 }, 1000);
+            resetView();
         }
-    }, [Globe]);
+    }, [Globe, resetView]);
+
+    const handleArcClick = (arc: any) => {
+        if (globeRef.current) {
+            globeRef.current.pointOfView({
+                lat: arc.startLat,
+                lng: arc.startLng,
+                altitude: 0.8
+            }, 1000);
+
+            setIsFocused(true);
+
+            const controls = globeRef.current.controls();
+            if (controls) {
+                controls.autoRotate = false;
+            }
+        }
+    };
 
     const arcsData = arcs.length > 0 ? arcs : [];
 
-    // Derive points from arcs prop
-    const pointsData = arcsData.flatMap((r: any) => [
-        { lat: r.startLat, lng: r.startLng, color: r.color, size: r.riskLevel === 'high' ? 0.6 : 0.3, label: r.label?.split(' → ')[0] || '' },
-        { lat: r.endLat, lng: r.endLng, color: r.color, size: r.riskLevel === 'high' ? 0.6 : 0.3, label: r.label?.split(' → ')[1] || '' },
+    // Derive points from arcs to show origins and destination (USA)
+    const pointsData = arcsData.flatMap((arc: any) => [
+        {
+            lat: arc.startLat,
+            lng: arc.startLng,
+            color: arc.color,
+            size: arc.riskLevel === 'high' ? 0.6 : 0.3,
+            label: arc.label?.split(': ')[1]?.split(' → ')[0] || '',
+            arcData: arc
+        },
+        {
+            lat: arc.endLat,
+            lng: arc.endLng,
+            color: arc.color,
+            size: 0.1,
+            label: "USA",
+            arcData: arc
+        },
     ]);
 
     const criticalCount = arcsData.filter((a: any) => a.riskLevel === 'high').length;
@@ -68,6 +113,7 @@ const GlobeView = ({ arcs }: { arcs: any[] }) => {
                 arcDashGap={0.5}
                 arcDashAnimateTime={(d: any) => d.status === 'disrupted' ? 0 : 2000}
                 arcLabel="label"
+                onArcClick={handleArcClick}
                 pointsData={pointsData}
                 pointLat="lat"
                 pointLng="lng"
@@ -75,30 +121,60 @@ const GlobeView = ({ arcs }: { arcs: any[] }) => {
                 pointAltitude={0.01}
                 pointRadius="size"
                 pointLabel="label"
+                onPointClick={(point: any) => handleArcClick(point.arcData)}
                 atmosphereColor="hsl(217, 91%, 60%)"
                 atmosphereAltitude={0.15}
             />
+
             {/* Header overlay */}
             <div className="absolute top-4 left-4 right-4 flex items-start justify-between pointer-events-none">
-                <div>
-                    <h2 className="text-sm font-medium text-foreground">Global Supply Network</h2>
-                    <p className="text-[10px] font-mono text-muted-foreground mt-0.5">
-                        {routeCount} active route{routeCount !== 1 ? 's' : ''} · {criticalCount} critical alert{criticalCount !== 1 ? 's' : ''}
-                    </p>
+                <div className="flex flex-col gap-2">
+                    <div>
+                        <h2 className="text-sm font-medium text-foreground">Global Supply Network</h2>
+                        <p className="text-[10px] font-mono text-muted-foreground mt-0.5">
+                            {routeCount} active route{routeCount !== 1 ? 's' : ''} · {criticalCount} critical alert{criticalCount !== 1 ? 's' : ''}
+                        </p>
+                    </div>
                 </div>
-                <div className="flex gap-3">
-                    {[
-                        { color: 'bg-risk-high', label: 'Critical' },
-                        { color: 'bg-risk-mid', label: 'Warning' },
-                        { color: 'bg-risk-low', label: 'Nominal' },
-                    ].map((l) => (
-                        <div key={l.label} className="flex items-center gap-1.5">
-                            <div className={`w-2 h-2 rounded-full ${l.color}`} />
-                            <span className="text-[9px] text-muted-foreground">{l.label}</span>
+
+                <div className="flex flex-col items-end gap-3">
+                    <div className="flex gap-3 pointer-events-auto bg-background/40 backdrop-blur-md p-2 rounded-lg border border-secondary/20">
+                        {[
+                            { color: 'bg-risk-high', label: 'Critical' },
+                            { color: 'bg-risk-mid', label: 'Warning' },
+                            { color: 'bg-risk-low', label: 'Nominal' },
+                        ].map((l) => (
+                            <div key={l.label} className="flex items-center gap-1.5">
+                                <div className={`w-2 h-2 rounded-full ${l.color}`} />
+                                <span className="text-[9px] text-muted-foreground">{l.label}</span>
+                            </div>
+                        ))}
+                    </div>
+
+                    <div className="flex gap-2 pointer-events-auto">
+                        {isFocused && (
+                            <button
+                                onClick={resetView}
+                                className="flex items-center gap-1.5 px-2 py-1 bg-secondary/20 hover:bg-secondary/40 border border-secondary/40 rounded-md text-[9px] text-foreground transition-all animate-in fade-in zoom-in duration-200"
+                            >
+                                <RotateCcw size={10} />
+                                Reset View
+                            </button>
+                        )}
+                        <div className="px-2 py-1 bg-secondary/10 border border-secondary/20 rounded-md text-[9px] text-muted-foreground flex items-center gap-1.5">
+                            <Maximize2 size={10} />
+                            Interactive Mode
                         </div>
-                    ))}
+                    </div>
                 </div>
             </div>
+
+            {/* Interaction Toast */}
+            {!isFocused && arcs.length > 0 && (
+                <div className="absolute bottom-4 left-1/2 -translate-x-1/2 px-3 py-1.5 bg-background/60 backdrop-blur-md border border-secondary/20 rounded-full pointer-events-none animate-bounce-subtle">
+                    <span className="text-[9px] text-muted-foreground font-mono">Click a vector line to focus source region</span>
+                </div>
+            )}
         </div>
     );
 };
