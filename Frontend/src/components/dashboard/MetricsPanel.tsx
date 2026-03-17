@@ -17,12 +17,12 @@ const MetricsPanel = ({ analysis, isLoading }: { analysis: any; isLoading: boole
         { label: 'Risk Score', value: analysis.score.toString(), delta: analysis.score > 50 ? 12 : -5 },
         { label: 'Trade Concentration', value: `${analysis.breakdown.trade}%`, delta: 2.1 },
         { label: 'Corporate Exposure', value: `${analysis.breakdown.corporate}%`, delta: 5.4 },
-        { label: 'Substitute Readiness', value: `${analysis.breakdown.substitutability}%`, delta: -1.2 },
+        { label: 'Supply Risk', value: `${analysis.breakdown.substitutability}%`, delta: -1.2 },
     ] : [
         { label: 'Risk Score', value: '0', delta: 0 },
         { label: 'Trade Concentration', value: '0%', delta: 0 },
         { label: 'Corporate Exposure', value: '0%', delta: 0 },
-        { label: 'Substitute Readiness', value: '0%', delta: 0 },
+        { label: 'Supply Risk', value: '0%', delta: 0 },
     ];
 
     return (

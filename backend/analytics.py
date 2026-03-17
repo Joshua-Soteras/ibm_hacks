@@ -1,3 +1,5 @@
+import math
+
 import pandas as pd
 import sqlite3
 import os
@@ -29,6 +31,21 @@ def get_company_list():
             clean_companies.append(name)
             
     return sorted(clean_companies)
+
+RISK_SCORE_MAP = {'LOW': 20, 'MODERATE': 50, 'HIGH': 70, 'CRITICAL': 90}
+
+
+def _normalize_hhi(hhi: float) -> float:
+    """Map HHI (0-10000) to risk score (0-100) using DOJ/FTC antitrust thresholds."""
+    if hhi <= 1500:
+        return (hhi / 1500) * 30
+    elif hhi <= 2500:
+        return 30 + ((hhi - 1500) / 1000) * 30
+    elif hhi <= 5000:
+        return 60 + ((hhi - 2500) / 2500) * 25
+    else:
+        return 85 + min((hhi - 5000) / 5000, 1.0) * 15
+
 
 def compute_hhi(trade_data):
     """Compute Herfindahl-Hirschman Index using Customs Value (USD)."""
@@ -88,25 +105,32 @@ def analyze_company(company_name):
     avg_hhi = np.mean(mineral_hhis) if mineral_hhis else 0
     
     # 3. Compute Scores
-    trade_score = avg_hhi * 100
-    corporate_score = (len(minerals) / 10.0) * 100
-    if corporate_score > 100: corporate_score = 100
+    # Trade score: convert HHI (0-1 scale from compute_hhi) to 0-10000, then apply piecewise normalization
+    trade_score = _normalize_hhi(avg_hhi * 10000)
 
-    # Substitutability Risk
-    subst_map = {'LOW': 1.0, 'MODERATE': 0.5, 'HIGH': 0.2}
-    subst_val = 0.5
-    
-    # Batch look up minerals in USGS table
+    # Corporate score: severity-weighted average of USGS supply risk per mineral
     placeholders = ','.join(['?'] * len(minerals))
     query_usgs = f"SELECT * FROM usgs_minerals WHERE \"USGS Commodity Name\\n(exact CSV name)\" IN ({placeholders})"
     relevant_usgs = pd.read_sql_query(query_usgs, conn, params=minerals)
-    
-    if not relevant_usgs.empty:
-        risk_status = relevant_usgs['Supply Risk'].iloc[0]
-        if isinstance(risk_status, str):
-            subst_val = subst_map.get(risk_status.upper(), 0.5)
-            
-    subst_score = subst_val * 100
+
+    if not relevant_usgs.empty and 'Supply Risk' in relevant_usgs.columns:
+        mineral_scores = [
+            RISK_SCORE_MAP.get(str(r).upper(), 50)
+            for r in relevant_usgs['Supply Risk']
+            if pd.notna(r)
+        ]
+        corporate_score = round(sum(mineral_scores) / len(mineral_scores)) if mineral_scores else 50
+    else:
+        corporate_score = min(round((len(minerals) / 10.0) * 100), 100)
+
+    # Substitutability Risk: average across all company minerals, correct scale (high risk = high score)
+    subst_scores = []
+    if not relevant_usgs.empty and 'Supply Risk' in relevant_usgs.columns:
+        for r in relevant_usgs['Supply Risk']:
+            if pd.notna(r) and isinstance(r, str):
+                subst_scores.append(RISK_SCORE_MAP.get(r.upper(), 50))
+    subst_score = round(sum(subst_scores) / len(subst_scores)) if subst_scores else 50
+
     composite_score = round(trade_score * 0.40 + corporate_score * 0.35 + subst_score * 0.25)
     
     # 4. Summary
@@ -163,6 +187,6 @@ def get_mineral_risk(mineral_name):
     return {
         "mineral": mineral_name,
         "hhi": round(hhi, 3),
-        "concentration_score": round(hhi * 100, 1),
+        "concentration_score": round(_normalize_hhi(hhi * 10000), 1),
         "supply_risk": supply_risk
     }

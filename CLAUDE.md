@@ -71,19 +71,19 @@ Environment variables required in root `.env`: `IBM_API_KEY`, `ORCHESTRATE_APIKE
 - `GET /api/company/summary/{company}` — company name + risk summary snippet
 
 **`analytics.py`** — risk analysis engine querying `mineralwatch.db`. Computes composite risk score using three weighted components:
-- Trade Risk (40%): average HHI normalized to 0–100
-- Corporate Risk (35%): mineral exposure breadth
-- Substitutability Risk (25%): from USGS supply risk ratings
+- Trade Risk (40%): average HHI normalized to 0–100 via piecewise DOJ/FTC thresholds (0-1500→0-30, 1500-2500→30-60, 2500-5000→60-85, 5000-10000→85-100)
+- Corporate Risk (35%): severity-weighted average of USGS supply risk scores per mineral
+- Substitutability Risk (25%): from USGS supply risk ratings (LOW=20, MODERATE=50, HIGH=70, CRITICAL=90)
 
 ### ADK Agents (`backend/adk-project/`)
 
-Three agents using `watsonx/ibm/granite-3-8b-instruct`:
+Three agents using `groq/openai/gpt-oss-120b` (Groq-served, 120B params, fast inference with native tool-calling):
 
 | Agent | Style | Tools | Purpose |
 |-------|-------|-------|---------|
 | `trade_intel_agent` | ReAct | `query_import_volumes`, `compute_herfindahl`, `get_mineral_profile` | Trade flow analysis & supply concentration |
-| `corporate_exposure_agent` | ReAct | `search_edgar_10k`, `extract_mineral_dependencies`, `summarize_risk_section` | SEC filing analysis & corporate risk |
-| `risk_orchestrator` | Plan-Act | `compute_composite_risk`, `simulate_disruption`, `generate_mitigation_brief` | Coordinates sub-agents, computes final scores |
+| `corporate_exposure_agent` | ReAct | `extract_mineral_dependencies`, `summarize_risk_section`, `search_edgar_10k` | SEC filing analysis & corporate risk (DB-first, live API as supplement) |
+| `risk_orchestrator` | Plan-Act | `compute_composite_risk`, `simulate_disruption` | Coordinates sub-agents, computes final scores |
 
 ### ADK Tools (`backend/adk-project/tools/`)
 
@@ -94,12 +94,12 @@ All data-pulling tools query `mineralwatch.db` exclusively — no CSV or Excel r
 | `query_import_volumes` | `trade_data` | Import volumes by mineral & country |
 | `compute_herfindahl` | (pure computation) | HHI concentration index from trade flows |
 | `get_mineral_profile` | `usgs_minerals`, `edgar_summary`, `edgar_blind_spot_analysis` | USGS mineral data + EDGAR enrichment |
-| `extract_mineral_dependencies` | `edgar_mineral_company_matrix`, `edgar_filing_details`, `usgs_minerals` | Company mineral exposures with severity |
-| `summarize_risk_section` | `edgar_filing_details`, `edgar_blind_spot_analysis`, `edgar_summary` | Company risk summary with exposure score |
-| `compute_composite_risk` | `usgs_minerals` | Weighted composite score (trade 40%, corporate 35%, substitutability 25%) |
-| `search_edgar_10k` | (live SEC EDGAR API) | Real-time filing search |
+| `extract_mineral_dependencies` | `edgar_mineral_company_matrix`, `edgar_filing_details`, `usgs_minerals` | Company mineral exposures with severity (matrix for 40 companies, filing_details fallback for ~1,020) |
+| `summarize_risk_section` | `edgar_filing_details`, `edgar_blind_spot_analysis`, `edgar_summary`, `usgs_minerals` | Company or mineral-centric risk summary with exposure score (optional `mineral_name` param for mineral-centric mode) |
+| `compute_composite_risk` | `usgs_minerals` | Weighted composite score with piecewise HHI normalization (trade 40%, corporate 35%, substitutability 25%) |
+| `search_edgar_10k` | (live SEC EDGAR API) + `edgar_company_filings` for CIK lookup | Real-time filing search (supplemental freshness check) |
 | `simulate_disruption` | (pure computation) | Disruption scenario modeling |
-| `generate_mitigation_brief` | (stub) | Mitigation recommendations — awaiting Granite LLM |
+| `generate_mitigation_brief` | (stub, not wired to any agent) | Mitigation recommendations — awaiting Granite LLM |
 
 Shared helpers in `_db.py`: `get_db_conn()`, `strip_mineral_qualifier()` (handles matrix names like `"HAFNIUM (see ZIRCONIUM)"`), `USGS_COL`, `DEFAULT_RISK_SCORE`.
 

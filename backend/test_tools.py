@@ -106,6 +106,23 @@ def test_extract_mineral_dependencies():
     check("unknown company returns note", "note" in result_unk)
 
 
+def test_extract_deps_fallback():
+    """Test fallback to edgar_filing_details for companies not in the matrix."""
+    print("\n--- extract_mineral_dependencies (fallback) ---")
+    result = json.loads(extract_mineral_dependencies("Intel"))
+    check("finds Intel", result.get("company") == "Intel")
+    check("has minerals_found", len(result.get("minerals_found", [])) > 0,
+          f"got: {result.get('minerals_found', [])}")
+    check("has dependencies", len(result.get("dependencies", [])) > 0)
+    check("uses filing_details source", result.get("source") == "edgar_filing_details",
+          f"got: {result.get('source')}")
+
+    if result.get("dependencies"):
+        dep = result["dependencies"][0]
+        check("fallback dep has severity",
+              dep.get("severity") in ("critical", "high", "moderate", "low", "unknown"))
+
+
 def test_extract_mineral_deps_parenthetical():
     """Test that minerals with parenthetical names still get USGS severity."""
     print("\n--- extract_mineral_dependencies (parenthetical minerals) ---")
@@ -149,6 +166,21 @@ def test_summarize_risk_section():
     check("unknown company score=0", result_unk.get("exposure_score") == 0)
 
 
+def test_summarize_mineral_mode():
+    """Test mineral-centric mode of summarize_risk_section."""
+    print("\n--- summarize_risk_section (mineral-centric) ---")
+    result = json.loads(summarize_risk_section("", mineral_name="GALLIUM"))
+    check("has mineral", result.get("mineral") == "GALLIUM")
+    check("mode is mineral_centric", result.get("mode") == "mineral_centric")
+    check("has exposure_score", result.get("exposure_score", 0) > 0,
+          f"got: {result.get('exposure_score')}")
+    check("has company_count", result.get("company_count", 0) > 0,
+          f"got: {result.get('company_count')}")
+    check("has supply_risk", result.get("supply_risk") == "CRITICAL",
+          f"got: {result.get('supply_risk')}")
+    check("has key_risks", len(result.get("key_risks", [])) > 0)
+
+
 def test_compute_herfindahl():
     print("\n--- compute_herfindahl ---")
     trade_result = query_import_volumes("tungsten")
@@ -170,6 +202,9 @@ def test_compute_composite_risk():
     # With gallium (CRITICAL supply risk -> 90), substitutability should be 90
     check("substitutability from DB", result["breakdown"]["substitutability_risk"] == 90,
           f"got: {result['breakdown']['substitutability_risk']}")
+    # HHI 5000 now normalizes to 85.0 (piecewise), not 50.0
+    check("trade_risk piecewise", result["breakdown"]["trade_risk"] == 85.0,
+          f"got: {result['breakdown']['trade_risk']}")
 
     # Test without mineral_name (should use default)
     result3 = json.loads(compute_composite_risk(trade_json, corp_json))
@@ -200,6 +235,9 @@ def test_end_to_end_pipeline():
     composite_data = json.loads(composite_result)
     check("e2e: composite score", composite_data["composite_score"] > 0)
     check("e2e: risk level set", composite_data["risk_level"] in ("low", "medium", "high", "critical"))
+    # With piecewise HHI normalization, gallium composite should be in 70-85 range
+    check("e2e: gallium score 70-85", 70 <= composite_data["composite_score"] <= 85,
+          f"got: {composite_data['composite_score']}")
     print(f"  INFO  composite_score={composite_data['composite_score']}, "
           f"risk_level={composite_data['risk_level']}")
 
@@ -209,8 +247,10 @@ if __name__ == "__main__":
     test_query_import_volumes()
     test_get_mineral_profile()
     test_extract_mineral_dependencies()
+    test_extract_deps_fallback()
     test_extract_mineral_deps_parenthetical()
     test_summarize_risk_section()
+    test_summarize_mineral_mode()
     test_compute_herfindahl()
     test_compute_composite_risk()
     test_end_to_end_pipeline()

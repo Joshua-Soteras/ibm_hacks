@@ -22,6 +22,18 @@ RISK_TO_SCORE = {
 }
 
 
+def _normalize_hhi(hhi: float) -> float:
+    """Map HHI (0-10000) to risk score (0-100) using DOJ/FTC antitrust thresholds."""
+    if hhi <= 1500:
+        return (hhi / 1500) * 30
+    elif hhi <= 2500:
+        return 30 + ((hhi - 1500) / 1000) * 30
+    elif hhi <= 5000:
+        return 60 + ((hhi - 2500) / 2500) * 25
+    else:
+        return 85 + min((hhi - 5000) / 5000, 1.0) * 15
+
+
 @tool()
 def compute_composite_risk(
     trade_data_json: str,
@@ -50,7 +62,7 @@ def compute_composite_risk(
     corporate_data = json.loads(corporate_data_json)
 
     hhi = trade_data.get("hhi", 0)
-    trade_risk = min(hhi / 100, 100)
+    trade_risk = _normalize_hhi(hhi)
 
     corporate_risk = corporate_data.get("exposure_score", 0)
 
