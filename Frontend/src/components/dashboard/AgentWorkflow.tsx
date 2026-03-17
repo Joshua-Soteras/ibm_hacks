@@ -2,6 +2,7 @@ import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { ChevronDown } from "lucide-react";
 import type { AgentStepData } from "@/hooks/useAnalysisStream";
+import Markdown from "@/components/ui/markdown";
 
 const AgentStep = ({ step, isLast }: { step: AgentStepData; isLast: boolean }) => {
     const [expanded, setExpanded] = useState(false);
@@ -22,9 +23,9 @@ const AgentStep = ({ step, isLast }: { step: AgentStepData; isLast: boolean }) =
                     </span>
                     <span className="text-[9px] font-mono text-muted-foreground">{step.timestamp}</span>
                 </div>
-                <pre className="text-[9px] font-mono text-muted-foreground bg-secondary/10 p-2 rounded border border-secondary/20 leading-relaxed overflow-x-auto whitespace-pre-wrap">
-                    {step.trace}
-                </pre>
+                <div className="bg-secondary/10 p-2 rounded border border-secondary/20 overflow-x-auto">
+                    <Markdown>{step.trace}</Markdown>
+                </div>
                 {hasFullOutput && (
                     <>
                         <button
@@ -49,9 +50,9 @@ const AgentStep = ({ step, isLast }: { step: AgentStepData; isLast: boolean }) =
                                     transition={{ duration: 0.2 }}
                                     className="overflow-hidden"
                                 >
-                                    <pre className="text-[9px] font-mono text-muted-foreground bg-secondary/10 p-2 rounded border border-primary/20 leading-relaxed overflow-x-auto whitespace-pre-wrap max-h-[300px] overflow-y-auto">
-                                        {step.full_output}
-                                    </pre>
+                                    <div className="bg-secondary/10 p-2 rounded border border-primary/20 max-h-[300px] overflow-y-auto overflow-x-auto">
+                                        <Markdown>{step.full_output!}</Markdown>
+                                    </div>
                                 </motion.div>
                             )}
                         </AnimatePresence>

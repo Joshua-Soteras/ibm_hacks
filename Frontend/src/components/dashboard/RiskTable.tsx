@@ -36,13 +36,28 @@ const RiskTable = ({ flows, isLoading }: { flows: any[]; isLoading: boolean }) =
     };
 
     const arrow = (key: SortKey) =>
-        sortKey === key ? (sortDir === "asc" ? " ↑" : " ↓") : "";
+        sortKey === key ? (sortDir === "asc" ? " \u2191" : " \u2193") : "";
+
+    const disruptedCount = flows.filter((f: any) => f.status === 'disrupted').length;
+    const stressedCount = flows.filter((f: any) => f.status === 'stressed').length;
 
     return (
         <div className="card-surface h-full flex flex-col overflow-hidden">
             <div className="p-4 border-b border-secondary/20 flex items-center justify-between">
                 <h3 className="text-[10px] text-muted-foreground uppercase font-bold tracking-widest">Trade Flow Risk Analysis</h3>
-                <span className="text-[9px] font-mono text-muted-foreground">{flows.length} Active Vectors</span>
+                <div className="flex items-center gap-2">
+                    {disruptedCount > 0 && (
+                        <span className="text-[9px] font-mono px-1.5 py-0.5 rounded-full bg-risk-high/10 text-risk-high border border-risk-high/20">
+                            {disruptedCount} Disrupted
+                        </span>
+                    )}
+                    {stressedCount > 0 && (
+                        <span className="text-[9px] font-mono px-1.5 py-0.5 rounded-full bg-risk-mid/10 text-risk-mid border border-risk-mid/20">
+                            {stressedCount} Stressed
+                        </span>
+                    )}
+                    <span className="text-[9px] font-mono text-muted-foreground">{flows.length} Active Vectors</span>
+                </div>
             </div>
             <div className="flex-1 overflow-y-auto px-4">
                 <table className="w-full text-left">
@@ -67,11 +82,13 @@ const RiskTable = ({ flows, isLoading }: { flows: any[]; isLoading: boolean }) =
                                 <td className="py-2.5 text-muted-foreground">{flow.country}</td>
                                 <td className="py-2.5">
                                     <div className="flex items-center gap-2">
-                                        <div className="flex-1 h-1 bg-secondary/30 rounded-full overflow-hidden">
+                                        <div className="relative flex-1 h-1 bg-secondary/30 rounded-full overflow-hidden">
                                             <div
                                                 className={`h-full ${flow.risk === 'high' ? 'bg-risk-high' : flow.risk === 'elevated' ? 'bg-risk-mid' : 'bg-risk-low'}`}
                                                 style={{ width: `${flow.share}%` }}
                                             />
+                                            <div className="absolute left-[30%] top-0 w-px h-full bg-muted-foreground/20" />
+                                            <div className="absolute left-[70%] top-0 w-px h-full bg-muted-foreground/20" />
                                         </div>
                                         <span className="font-mono tabular-nums min-w-[3ch]">{Math.round(flow.share)}%</span>
                                     </div>

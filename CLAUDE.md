@@ -57,16 +57,17 @@ Optional: `BACKEND_API_URL` — public URL of the FastAPI backend (e.g. ngrok tu
 
 **Dashboard Panels** (composed in `src/pages/Index.tsx`):
 - **CompanySelector** — dropdown to pick a company for analysis
-- **MetricsPanel** — risk score, trade concentration, corporate exposure, substitutability; shows disrupted scores + delta during simulation
-- **GlobeView** — 3D globe with supply arcs colored by risk level; risk-proportional thickness (high=1.2, elevated=0.8, low=0.4) and animation speed (high=4s slow, elevated=2.5s, low=1.2s fast); staggered arc launches via `arcDashInitialGap`; supports disrupted/stressed/active arc states during simulation (disrupted uses `rgba()` notation for Three.js-compatible transparent colors)
-- **AgentWorkflow** — real-time agent execution timeline streamed via SSE from `/api/analyze-stream/{company}`; expandable full agent output on steps with truncated content (animated expand/collapse)
+- **MetricsPanel** — risk score, trade concentration, corporate exposure, substitutability; shows disrupted scores + delta during simulation; hover tooltips on each metric explaining its computation; Risk Score value color-coded by severity (red >70, amber 30–70, green <30); animated value transitions on score changes
+- **GlobeView** — 3D globe with supply arcs colored by risk level; risk-proportional thickness (high=1.2, elevated=0.8, low=0.4) and animation speed (high=4s slow, elevated=2.5s, low=1.2s fast); staggered arc launches via `arcDashInitialGap`; supports disrupted/stressed/active arc states during simulation (disrupted uses `rgba()` notation for Three.js-compatible transparent colors); expandable legend with line-thickness explanations and disruption states; arc speed multiplier control (0.5x–2x) in bottom-right corner
+- **AgentWorkflow** — real-time agent execution timeline streamed via SSE from `/api/analyze-stream/{company}`; expandable full agent output on steps with truncated content (animated expand/collapse); markdown rendering for agent output via `react-markdown`
 - **ScenariosPanel** — dynamic disruption scenario cards generated from trade concentration data; click-to-simulate with reset; custom free-text scenario input that invokes the cloud agent
-- **RiskTable** — sortable trade flow table with concentration bars (click column headers to sort)
+- **RiskTable** — sortable trade flow table with concentration bars (click column headers to sort); threshold markers at 30% and 70% on concentration bars; disrupted/stressed flow count badges in header during simulation; receives disrupted trade flows from simulation results
 
 **Key Frontend Files:**
 - `src/hooks/useAnalysisStream.ts` — SSE hook using `EventSource` API, manages 4-step agent workflow state; `AgentStepData` includes optional `full_output` for untruncated agent text
 - `src/hooks/useCustomScenarioStream.ts` — SSE hook for free-text custom scenario analysis via `/api/custom-scenario-stream/{company}`; stores `full_output` from SSE events
 - `src/lib/api.ts` — Axios API client with TypeScript interfaces (`ScenarioCard`, `SimulationResult`)
+- `src/components/ui/markdown.tsx` — shared Markdown renderer (`react-markdown`) with dark-theme styling for agent output and summaries
 - `src/data/countryCoords.json` — ~130 country centroid coordinates for globe arc rendering
 - `src/data/simulatedData.ts` — legacy mock data (no longer imported by any component)
 

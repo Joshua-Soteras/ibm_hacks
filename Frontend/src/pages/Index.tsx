@@ -18,6 +18,7 @@ const Index = () => {
     const [selectedCompany, setSelectedCompany] = useState<string | null>(null);
     const [activeScenario, setActiveScenario] = useState<ScenarioCard | null>(null);
     const [simulationResult, setSimulationResult] = useState<SimulationResult | null>(null);
+    const [speedMultiplier, setSpeedMultiplier] = useState(1);
 
     const { steps, isStreaming, analysisResult, startStream } = useAnalysisStream();
     const { customSteps, isCustomStreaming, customResult, startCustomStream, resetCustom } = useCustomScenarioStream();
@@ -134,14 +135,6 @@ const Index = () => {
                         <p className="text-[10px] font-mono text-muted-foreground mt-1">
                             Minerals: {analysis.minerals.join(', ')}
                         </p>
-                        <p className="text-[10px] font-mono text-muted-foreground mt-2 line-clamp-3 italic opacity-70">
-                           "{analysis.summary}"
-                        </p>
-                        {analysis.agent_enriched === false && (
-                            <span className="text-[8px] font-mono text-muted-foreground/50 mt-0.5 block">
-                                Local analysis (agent unavailable)
-                            </span>
-                        )}
                     </div>
                 )}
 
@@ -168,7 +161,7 @@ const Index = () => {
                         </div>
                     </div>
                 )}
-                <GlobeView arcs={arcs} />
+                <GlobeView arcs={arcs} speedMultiplier={speedMultiplier} onSpeedChange={setSpeedMultiplier} />
             </div>
 
             {/* Right Panel: Agent Workflow */}
@@ -178,7 +171,7 @@ const Index = () => {
 
             {/* Bottom: Risk Table */}
             <div className="col-span-6 row-span-2">
-                <RiskTable flows={analysis?.trade_flows || []} isLoading={isAnalyzing} />
+                <RiskTable flows={simulationResult?.disrupted_trade_flows || analysis?.trade_flows || []} isLoading={isAnalyzing} />
             </div>
         </div>
     );
