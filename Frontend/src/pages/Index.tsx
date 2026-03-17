@@ -133,6 +133,11 @@ const Index = () => {
                         <p className="text-[10px] font-mono text-muted-foreground mt-2 line-clamp-3 italic opacity-70">
                            "{analysis.summary}"
                         </p>
+                        {analysis.agent_enriched === false && (
+                            <span className="text-[8px] font-mono text-muted-foreground/50 mt-0.5 block">
+                                Local analysis (agent unavailable)
+                            </span>
+                        )}
                     </div>
                 )}
 

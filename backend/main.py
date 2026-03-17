@@ -245,6 +245,47 @@ def custom_scenario_stream(company: str, scenario: str):
     )
 
 
+@app.get("/api/agent-diagnostics")
+def agent_diagnostics():
+    """Diagnostic endpoint for debugging cloud agent connectivity."""
+    diag = {
+        "orchestrate_url_set": bool(os.getenv("ORCHESTRATE_URL")),
+        "ibm_api_key_set": bool(os.getenv("IBM_API_KEY")),
+        "backend_api_url_set": bool(os.getenv("BACKEND_API_URL")),
+        "backend_api_url": os.getenv("BACKEND_API_URL", ""),
+        "agents": {},
+        "callback_reachable": None,
+    }
+
+    # Test agent UUID resolution
+    if diag["orchestrate_url_set"] and diag["ibm_api_key_set"]:
+        try:
+            from agent_client import _get_authenticator, _resolve_agent_uuid
+            authenticator = _get_authenticator()
+            for name in ["risk_orchestrator", "trade_intel_agent", "corporate_exposure_agent"]:
+                try:
+                    uuid = _resolve_agent_uuid(name, authenticator)
+                    diag["agents"][name] = {"status": "resolved", "uuid": uuid}
+                except Exception as e:
+                    diag["agents"][name] = {"status": "error", "error": str(e)}
+        except Exception as e:
+            diag["agents"]["_auth"] = {"status": "error", "error": str(e)}
+
+    # Test callback reachability
+    backend_url = os.getenv("BACKEND_API_URL", "")
+    if backend_url:
+        try:
+            import requests as http_requests
+            r = http_requests.get(f"{backend_url}/health", timeout=5,
+                                  headers={"ngrok-skip-browser-warning": "true"})
+            diag["callback_reachable"] = r.status_code == 200
+        except Exception as e:
+            diag["callback_reachable"] = False
+            diag["callback_error"] = str(e)
+
+    return diag
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="localhost", port=8000)

@@ -7,11 +7,36 @@ from urllib.parse import quote
 import requests
 from ibm_watsonx_orchestrate.agent_builder.tools import tool
 
-import sys as _sys
-from pathlib import Path as _Path
-_sys.path.insert(0, str(_Path(__file__).resolve().parent))
-from _api import is_api_mode, api_get, BACKEND_CONNECTION
-from _db import get_db_conn
+try:
+    import sys as _sys
+    from pathlib import Path as _Path
+    _sys.path.insert(0, str(_Path(__file__).resolve().parent))
+    from _api import is_api_mode, api_get, BACKEND_CONNECTION
+    from _db import get_db_conn
+except (ImportError, ModuleNotFoundError):
+    import os as _os, requests as _requests
+    BACKEND_CONNECTION = {"app_id": "backend_api", "type": "key_value_creds"}
+    _cached_url = None
+    def _resolve_backend_url():
+        try:
+            from ibm_watsonx_orchestrate.run import connections
+            c = connections.key_value("backend_api")
+            url = c.get("BACKEND_API_URL", "")
+            if url: return url.rstrip("/")
+        except Exception: pass
+        return _os.environ.get("BACKEND_API_URL", "").rstrip("/")
+    def _get_url():
+        global _cached_url
+        if _cached_url is None: _cached_url = _resolve_backend_url()
+        return _cached_url
+    def is_api_mode(): return bool(_get_url())
+    def api_get(path, params=None, timeout=30):
+        url = _get_url()
+        resp = _requests.get(f"{url}{path}", params=params,
+                             headers={"ngrok-skip-browser-warning": "true"}, timeout=timeout)
+        resp.raise_for_status(); return resp.json()
+    def get_db_conn():
+        raise RuntimeError("Local DB unavailable in cloud. Ensure BACKEND_API_URL is set.")
 
 EDGAR_SEARCH_URL = "https://efts.sec.gov/LATEST/search-index"
 USER_AGENT = "MineralWatch/1.0 (supply-chain-research)"

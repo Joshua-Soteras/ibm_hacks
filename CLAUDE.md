@@ -90,6 +90,7 @@ Optional: `BACKEND_API_URL` — public URL of the FastAPI backend (e.g. ngrok tu
 - `GET /api/edgar/cik/{company}` — CIK lookup from EDGAR data (ADK tool callback)
 - `GET /api/analyze-stream/{company}` — SSE endpoint streaming staged analysis events (orchestrator_planning → trade_intel → corporate_exposure → orchestrator_scoring → complete)
 - `GET /api/custom-scenario-stream/{company}?scenario=` — SSE endpoint for free-text custom scenario analysis via cloud agent
+- `GET /api/agent-diagnostics` — debug endpoint: env var status, agent UUID resolution, callback reachability
 
 **`analytics.py`** — risk analysis engine querying `mineralwatch.db`. Decomposed into staged helpers for SSE streaming:
 - `_get_trade_data_for_company(company, conn, minerals)` — trade flows + HHI computation
@@ -103,7 +104,9 @@ Optional: `BACKEND_API_URL` — public URL of the FastAPI backend (e.g. ngrok tu
 - `get_risk_summary(company, mineral)` — company-centric or mineral-centric risk summary (ADK tool callback)
 - `lookup_edgar_cik(company)` — CIK lookup from EDGAR data (ADK tool callback)
 
-**`agent_client.py`** — IBM Watson Orchestrate RunClient integration for invoking the deployed `risk_orchestrator` agent. Uses IAM authentication, agent UUID resolution, and polling for run completion. Falls back to keyword-based extraction + local `simulate_company_disruption()` if the agent is unavailable. Powers both `/api/analyze-stream/{company}` (concurrent agent + local analytics) and `/api/custom-scenario-stream/{company}` (agent-only with simulation).
+**`agent_client.py`** — IBM Watson Orchestrate RunClient integration for invoking the deployed `risk_orchestrator` agent. Uses IAM authentication, agent UUID resolution, and polling for run completion. Falls back to keyword-based extraction + local `simulate_company_disruption()` if the agent is unavailable. Powers both `/api/analyze-stream/{company}` (concurrent agent + local analytics) and `/api/custom-scenario-stream/{company}` (agent-only with simulation). Includes apology/refusal detection (`_is_agent_useful()`) — when the cloud LLM returns conversational refusals instead of tool outputs, the local analytics summary is preserved and the result includes `agent_enriched: false`.
+
+**`analytics.py`** includes `resolve_company_name()` which normalizes company names for callback endpoints. Handles LLM-reformulated names (e.g., "Amazon.com Inc" → "AMAZON COM INC") by stripping punctuation and doing case-insensitive matching against the DB.
 
 Computes composite risk score using three weighted components:
 - Trade Risk (40%): average HHI normalized to 0–100 via piecewise DOJ/FTC thresholds (0-1500→0-30, 1500-2500→30-60, 2500-5000→60-85, 5000-10000→85-100)
@@ -136,9 +139,11 @@ Tools support dual-mode data access: local SQLite (default) or HTTP callbacks to
 | `simulate_disruption` | (pure computation) | Disruption scenario modeling |
 | `generate_mitigation_brief` | (stub, not wired to any agent) | Mitigation recommendations — awaiting Granite LLM |
 
-Shared helpers:
+Shared helpers (local dev only — cloud tools inline these via try/except fallback):
 - `_db.py`: `get_db_conn()` (raises `FileNotFoundError` with guidance when DB missing), `strip_mineral_qualifier()`, `USGS_COL`, `DEFAULT_RISK_SCORE`
 - `_api.py`: `is_api_mode()`, `api_get()`, `BACKEND_CONNECTION` (credential declaration for `@tool()` decorators)
+
+**Cloud compatibility:** Each tool file wraps `_api`/`_db` imports in `try/except (ImportError, ModuleNotFoundError)` with inlined fallback definitions. Watson Orchestrate imports tools as standalone files (no access to sibling modules), so the fallback provides `BACKEND_CONNECTION`, `is_api_mode()`, `api_get()`, constants, and a `get_db_conn()` stub that raises `RuntimeError`.
 
 ### Cloud Deployment (IBM Watson Orchestrate)
 

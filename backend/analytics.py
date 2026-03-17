@@ -37,6 +37,57 @@ RISK_SCORE_MAP = {'LOW': 20, 'MODERATE': 50, 'HIGH': 70, 'CRITICAL': 90}
 
 USGS_COL = 'USGS Commodity Name\n(exact CSV name)'
 
+_COMPANY_NAME_CACHE: dict = {}
+
+
+def _normalize_for_match(name: str) -> str:
+    """Strip punctuation and collapse whitespace for fuzzy company name matching."""
+    return re.sub(r"\s+", " ", re.sub(r"[.\-,/']", " ", name)).strip().upper()
+
+
+def resolve_company_name(query: str, conn=None) -> str:
+    """Resolve a possibly-reformulated company name to its DB form.
+
+    Handles cases like 'Amazon.com Inc' → 'AMAZON COM INC' where the LLM
+    reformulates the company name when calling tools.
+    """
+    if query in _COMPANY_NAME_CACHE:
+        return _COMPANY_NAME_CACHE[query]
+
+    close_conn = False
+    if conn is None:
+        conn = get_db_conn()
+        close_conn = True
+
+    try:
+        cursor = conn.cursor()
+
+        # 1. Try exact LIKE match (fast path)
+        cursor.execute(
+            'SELECT DISTINCT Company FROM edgar_filing_details WHERE Company LIKE ? LIMIT 1',
+            (f"%{query}%",),
+        )
+        row = cursor.fetchone()
+        if row:
+            resolved = row[0].split('(')[0].strip()
+            _COMPANY_NAME_CACHE[query] = resolved
+            return resolved
+
+        # 2. Normalize and retry — strips punctuation so "Amazon.com" matches "AMAZON COM"
+        norm_query = _normalize_for_match(query)
+        cursor.execute('SELECT DISTINCT Company FROM edgar_filing_details')
+        for (db_name,) in cursor.fetchall():
+            clean = db_name.split('(')[0].strip()
+            if _normalize_for_match(clean) == norm_query or norm_query in _normalize_for_match(db_name):
+                _COMPANY_NAME_CACHE[query] = clean
+                return clean
+
+        # 3. No match — return original
+        return query
+    finally:
+        if close_conn:
+            conn.close()
+
 
 def strip_mineral_qualifier(name: str) -> str:
     """Strip parenthetical qualifiers and trailing asterisks from mineral names."""
@@ -483,6 +534,8 @@ def get_company_dependencies(company_name):
     """Extract mineral dependencies for a company from EDGAR data."""
     conn = get_db_conn()
     try:
+        # Resolve LLM-reformulated names (e.g. "Amazon.com Inc" → "AMAZON COM INC")
+        company_name = resolve_company_name(company_name, conn)
         cursor = conn.cursor()
 
         cursor.execute(
@@ -595,6 +648,8 @@ def get_risk_summary(company_name, mineral_name=None):
     """Summarize mineral supply-chain risk using EDGAR data."""
     conn = get_db_conn()
     try:
+        # Resolve LLM-reformulated names (e.g. "Amazon.com Inc" → "AMAZON COM INC")
+        company_name = resolve_company_name(company_name, conn)
         cursor = conn.cursor()
 
         # Mineral-centric mode

@@ -43,6 +43,10 @@ instructions: >
   Always pass the mineral_name parameter to compute_composite_risk to get a real
   substitutability score from USGS data instead of the default value of 50.
   Always return structured JSON with composite scores, risk levels, and clear breakdowns.
+
+  CRITICAL: Never refuse to analyze. You have tools and sub-agents. Always delegate
+  to them. If a sub-agent returns an error, include that error in your response
+  rather than apologizing. Never say "I'm unable to" or "I cannot access".
 collaborators:
   - trade_intel_agent
   - corporate_exposure_agent

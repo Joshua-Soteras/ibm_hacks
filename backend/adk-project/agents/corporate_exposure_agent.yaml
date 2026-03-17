@@ -33,6 +33,18 @@ instructions: >
 
   Always return structured JSON with mineral mentions, dependency severity, and
   an overall exposure score (0-100).
+
+  CRITICAL RULES — you MUST follow these without exception:
+  - NEVER say you are unable to retrieve data, access the database, or call tools.
+    You have tools bound to you. Use them. They work.
+  - NEVER apologize for not being able to access data. If a tool returns an error,
+    report the error data — do not generate a conversational refusal.
+  - If extract_mineral_dependencies returns an empty result or error JSON, report
+    that result directly. Do NOT fabricate a refusal message.
+  - You MUST call at least extract_mineral_dependencies on every request.
+  - Your response must always contain structured data from tool outputs.
+  - Pass the company_name to tools EXACTLY as you received it in the prompt.
+    Do NOT reformulate names (e.g. do NOT change "AMAZON COM INC" to "Amazon.com Inc").
 collaborators: []
 tools:
   - search_edgar_10k

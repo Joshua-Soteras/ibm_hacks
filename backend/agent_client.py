@@ -16,6 +16,23 @@ load_dotenv()
 
 logger = logging.getLogger(__name__)
 
+_REFUSAL_PATTERNS = [
+    "i'm sorry", "i apologize",
+    "unable to retrieve", "unable to access", "unable to fetch",
+    "cannot access", "cannot retrieve", "can't access", "can't retrieve",
+    "don't have access", "do not have access",
+    "currently unavailable", "currently unable",
+]
+
+
+def _is_agent_useful(text: str) -> bool:
+    """Return False if agent text is an apology/refusal instead of real analysis."""
+    if not text or len(text) < 50:
+        return False
+    lower = text.lower()
+    return not any(p in lower for p in _REFUSAL_PATTERNS)
+
+
 ORCHESTRATE_URL = os.getenv("ORCHESTRATE_URL", "")
 IBM_API_KEY = os.getenv("IBM_API_KEY", "")
 
@@ -108,6 +125,7 @@ def _try_agent_stream(company: str, scenario_text: str):
     prompt = (
         f"Assess the supply chain risk impact on {company} for the following scenario: "
         f"'{scenario_text}'. "
+        f"IMPORTANT: When calling tools, pass the company name EXACTLY as '{company}' — do not reformulate it. "
         f"Use your tools to analyze trade concentration, corporate exposure, and substitutability risk. "
         f"If specific countries and minerals are mentioned, run simulate_disruption to model the impact. "
         f"Provide a clear risk assessment with scores and recommendations."
@@ -172,8 +190,11 @@ def _try_agent_stream(company: str, scenario_text: str):
                     agent_text = c
                     break
 
-            # Truncate for display
+            # Truncate for display; flag if agent refused to call tools
+            useful = _is_agent_useful(agent_text)
             display_text = agent_text[:600] + ("..." if len(agent_text) > 600 else "")
+            if not useful:
+                display_text = "[Agent did not call tools] " + display_text
 
             yield _emit({
                 "stage": "agent_reasoning",
@@ -373,6 +394,7 @@ def _dispatch_agent(company: str):
 
     prompt = (
         f"Perform a comprehensive supply chain risk analysis for {company}. "
+        f"IMPORTANT: When calling tools, pass the company name EXACTLY as '{company}' — do not reformulate it. "
         f"Use your tools to: 1) Analyze trade concentration and HHI indices for all minerals {company} depends on, "
         f"2) Assess corporate exposure via SEC filing data, "
         f"3) Evaluate substitutability risk for critical minerals. "
@@ -599,9 +621,11 @@ def run_analysis_agent_generator(company: str):
     subst_score = local_result["breakdown"]["substitutability"]
 
     corp_trace = f"> Corporate exposure score: {corporate_score}\n> Substitutability risk: {subst_score}"
+    agent_useful = agent_available and agent_completed and agent_text and _is_agent_useful(agent_text)
     if agent_available and agent_completed and agent_text:
         excerpt = agent_text[:300] + ("..." if len(agent_text) > 300 else "")
-        corp_trace += f"\n> Agent insight: {excerpt}"
+        label = "Agent insight" if agent_useful else "Agent response (tools not called)"
+        corp_trace += f"\n> {label}: {excerpt}"
 
     yield _emit({
         "stage": "corporate_exposure",
@@ -621,9 +645,10 @@ def run_analysis_agent_generator(company: str):
     # Build final result — same shape as local analytics
     result = dict(local_result)
 
-    # Enrich summary with agent text if available
-    if agent_available and agent_completed and agent_text:
+    # Enrich summary with agent text only if the agent actually called its tools
+    if agent_useful:
         result["summary"] = agent_text
+    result["agent_enriched"] = agent_useful
 
     composite_score = result["score"]
 
@@ -632,7 +657,9 @@ def run_analysis_agent_generator(company: str):
         "title": "Risk Orchestrator — Scoring",
         "status": "completed",
         "trace": f"> Composite risk score: {composite_score}\n> Analysis complete for {company}"
-              + ("\n> Enriched with agent analysis" if agent_completed and agent_text else ""),
+              + ("\n> Enriched with agent analysis" if agent_useful
+                 else "\n> Using local analysis (agent did not call tools)" if agent_completed and agent_text
+                 else ""),
     })
 
     time.sleep(0.1)
