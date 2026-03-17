@@ -15,6 +15,8 @@ instructions: >
   1. Delegate trade data queries to trade_intel_agent to get import volumes and HHI.
   2. Delegate corporate analysis to corporate_exposure_agent for SEC filing exposure.
   3. Combine outputs using compute_composite_risk with weights: trade 40%, corporate 35%, substitutability 25%.
+     Pass the mineral_name parameter to compute_composite_risk to get a real
+     substitutability score from USGS data instead of the default value of 50.
 
   When running disruption scenarios:
   1. First gather baseline trade data via trade_intel_agent.
