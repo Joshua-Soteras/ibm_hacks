@@ -1,9 +1,15 @@
 """Shared database connection helper for ADK tools."""
 
+import re
 import sqlite3
 from pathlib import Path
 
 DB_PATH = Path(__file__).resolve().parent.parent.parent.parent / "data" / "mineralwatch.db"
+
+USGS_COL = 'USGS Commodity Name\n(exact CSV name)'
+
+# Default score for unknown risk levels — used across tools for consistency.
+DEFAULT_RISK_SCORE = 50
 
 
 def get_db_conn() -> sqlite3.Connection:
@@ -11,3 +17,14 @@ def get_db_conn() -> sqlite3.Connection:
     conn = sqlite3.connect(str(DB_PATH))
     conn.row_factory = sqlite3.Row
     return conn
+
+
+def strip_mineral_qualifier(name: str) -> str:
+    """Strip parenthetical qualifiers and trailing asterisks from mineral names.
+
+    Matrix columns like 'HAFNIUM (see ZIRCONIUM)' or 'DIAMOND (INDUSTRIAL)*'
+    need to be reduced to their base name for USGS lookups.
+    """
+    name = re.sub(r"\s*\(.*?\)", "", name)
+    name = name.strip("* ").strip()
+    return name

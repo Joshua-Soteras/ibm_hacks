@@ -21,46 +21,48 @@ def query_import_volumes(mineral_name: str, year: Optional[int] = None) -> str:
         array of {country, total_value_usd, share_pct} sorted by value descending.
     """
     conn = get_db_conn()
-    cursor = conn.cursor()
+    try:
+        cursor = conn.cursor()
 
-    if year is not None:
-        cursor.execute(
-            'SELECT Country, SUM("Customs Value (USD)") as total_value '
-            'FROM trade_data WHERE Mineral LIKE ? AND Year = ? '
-            'GROUP BY Country ORDER BY total_value DESC',
-            (f"%{mineral_name}%", year),
-        )
-    else:
-        cursor.execute(
-            'SELECT Country, SUM("Customs Value (USD)") as total_value '
-            'FROM trade_data WHERE Mineral LIKE ? '
-            'GROUP BY Country ORDER BY total_value DESC',
-            (f"%{mineral_name}%",),
-        )
+        if year is not None:
+            cursor.execute(
+                'SELECT Country, SUM("Customs Value (USD)") as total_value '
+                'FROM trade_data WHERE Mineral LIKE ? AND Year = ? '
+                'GROUP BY Country ORDER BY total_value DESC',
+                (f"%{mineral_name}%", year),
+            )
+        else:
+            cursor.execute(
+                'SELECT Country, SUM("Customs Value (USD)") as total_value '
+                'FROM trade_data WHERE Mineral LIKE ? '
+                'GROUP BY Country ORDER BY total_value DESC',
+                (f"%{mineral_name}%",),
+            )
 
-    rows = cursor.fetchall()
-    conn.close()
+        rows = cursor.fetchall()
 
-    if not rows:
+        if not rows:
+            return json.dumps({
+                "mineral": mineral_name.lower(),
+                "year": year,
+                "trade_flows": [],
+                "note": "No trade data found for this mineral.",
+            })
+
+        total = sum(r["total_value"] for r in rows)
+        trade_flows = []
+        for r in rows:
+            val = r["total_value"]
+            trade_flows.append({
+                "country": r["Country"],
+                "total_value_usd": val,
+                "share_pct": round(val / total * 100, 2) if total > 0 else 0.0,
+            })
+
         return json.dumps({
             "mineral": mineral_name.lower(),
             "year": year,
-            "trade_flows": [],
-            "note": "No trade data found for this mineral.",
+            "trade_flows": trade_flows,
         })
-
-    total = sum(r["total_value"] for r in rows)
-    trade_flows = []
-    for r in rows:
-        val = r["total_value"]
-        trade_flows.append({
-            "country": r["country"],
-            "total_value_usd": val,
-            "share_pct": round(val / total * 100, 2) if total > 0 else 0.0,
-        })
-
-    return json.dumps({
-        "mineral": mineral_name.lower(),
-        "year": year,
-        "trade_flows": trade_flows,
-    })
+    finally:
+        conn.close()

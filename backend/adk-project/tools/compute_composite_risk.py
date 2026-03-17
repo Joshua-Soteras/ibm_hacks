@@ -5,7 +5,7 @@ from typing import Optional
 
 from ibm_watsonx_orchestrate.agent_builder.tools import tool
 
-from ._db import get_db_conn
+from ._db import get_db_conn, USGS_COL, DEFAULT_RISK_SCORE, strip_mineral_qualifier
 
 WEIGHT_TRADE = 0.40
 WEIGHT_CORPORATE = 0.35
@@ -52,21 +52,23 @@ def compute_composite_risk(
     corporate_risk = corporate_data.get("exposure_score", 0)
 
     # Derive substitutability from DB if mineral_name is provided
-    substitutability_risk = corporate_data.get("substitutability_risk", 50)
+    substitutability_risk = corporate_data.get("substitutability_risk", DEFAULT_RISK_SCORE)
 
     if mineral_name:
+        base_name = strip_mineral_qualifier(mineral_name)
         conn = get_db_conn()
-        cursor = conn.cursor()
-        usgs_col = 'USGS Commodity Name\n(exact CSV name)'
-        cursor.execute(
-            f'SELECT "Supply Risk" FROM usgs_minerals WHERE "{usgs_col}" LIKE ?',
-            (f"%{mineral_name}%",),
-        )
-        row = cursor.fetchone()
-        conn.close()
-        if row and row["Supply Risk"]:
-            risk_str = row["Supply Risk"].upper()
-            substitutability_risk = RISK_TO_SCORE.get(risk_str, 50)
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
+                f'SELECT "Supply Risk" FROM usgs_minerals WHERE "{USGS_COL}" LIKE ?',
+                (f"%{base_name}%",),
+            )
+            row = cursor.fetchone()
+            if row and row["Supply Risk"]:
+                risk_str = row["Supply Risk"].upper()
+                substitutability_risk = RISK_TO_SCORE.get(risk_str, DEFAULT_RISK_SCORE)
+        finally:
+            conn.close()
 
     composite = round(
         WEIGHT_TRADE * trade_risk
